@@ -23,7 +23,7 @@ Pense nele como uma alternativa open-source ao WhisprFlow/Wispr, feita pra rodar
 
 ## Por que existe
 
-Aplicativos comerciais de ditado (WhisprFlow, Wispr, SuperWhisper) mandam o seu áudio pra servidores deles. Isso significa:
+Aplicativos comerciais de ditado mandam o seu áudio e screenshots para o servidores deles. Isso significa:
 
 - Seu áudio sai da máquina toda vez que você fala
 - Custo mensal recorrente
@@ -365,4 +365,4 @@ MIT — faça o que quiser.
 
 ## Autor
 
-[luckmattos](https://github.com/luckmattos) — construído em algumas horas com [Claude Code](https://claude.com/claude-code).
+[luckmattos](https://github.com/luckmattos) — desenvolvido com [Claude Code](https://claude.com/claude-code) como pair programmer.
