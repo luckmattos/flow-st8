@@ -6,6 +6,8 @@ from typing import TYPE_CHECKING
 import pystray
 from PIL import Image, ImageDraw
 
+import autostart
+
 if TYPE_CHECKING:
     from app import FlowSt8App
 
@@ -65,6 +67,11 @@ class TrayIcon:
                 enabled=False,
             ),
             pystray.Menu.SEPARATOR,
+            pystray.MenuItem(
+                "Iniciar com Windows",
+                self._toggle_autostart,
+                checked=lambda _: autostart.is_enabled(),
+            ),
             pystray.MenuItem("Sair", self._quit),
         )
 
@@ -82,6 +89,12 @@ class TrayIcon:
     def run(self) -> None:
         """Block on the tray message loop. Must be called from main thread."""
         self._icon.run()
+
+    def _toggle_autostart(self) -> None:
+        if autostart.is_enabled():
+            autostart.disable()
+        else:
+            autostart.enable()
 
     def _quit(self) -> None:
         self._app.shutdown()

@@ -53,7 +53,7 @@ restore_clipboard = true
 enabled = true
 
 [startup]
-autostart = false
+autostart = true
 """
 
 
@@ -106,7 +106,7 @@ class FeedbackConfig:
 
 @dataclass
 class StartupConfig:
-    autostart: bool = False
+    autostart: bool = True
 
 
 @dataclass
