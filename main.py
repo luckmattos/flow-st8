@@ -28,8 +28,12 @@ def main() -> None:
     log.info("Loading configuration...")
     config = load_config()
 
-    log.info("Starting flow-st8 (model=%s, hotkey=%s, vad=%s)",
-             config.model.name, config.hotkey.key, config.vad.enabled)
+    import autostart
+    autostart.sync(config.startup.autostart)
+
+    log.info("Starting flow-st8 (model=%s, hotkey=%s, vad=%s, autostart=%s)",
+             config.model.name, config.hotkey.key, config.vad.enabled,
+             config.startup.autostart)
 
     app = FlowSt8App(config)
     app.start()
