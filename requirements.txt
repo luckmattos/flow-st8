@@ -1,0 +1,6 @@
+openai-whisper>=20250625
+sounddevice>=0.5
+pystray>=0.19
+pyperclip>=1.9
+silero-vad>=5.1
+pillow>=12.0
