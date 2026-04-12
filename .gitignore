@@ -21,6 +21,9 @@ ENV/
 *.swp
 *.swo
 
+# Claude Code tooling (dev sessions, memory)
+.claude/
+
 # OS
 .DS_Store
 Thumbs.db
