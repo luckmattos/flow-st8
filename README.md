@@ -1,5 +1,7 @@
 # flow-st8
 
+![flow-st8](banner.svg)
+
 Local voice-to-text for Windows. Press `Ctrl+Win`, talk, press again — your words are transcribed by Whisper and pasted wherever your cursor is. No cloud, no subscription, no audio leaving your machine.
 
 No cloud. No subscription. No screenshots sent to anyone's server.
