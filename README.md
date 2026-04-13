@@ -1,6 +1,6 @@
 # flow-st8
 
-Press `Ctrl+Win`, talk, press again — your words appear wherever your cursor is. Transcribed locally by Whisper, never leaving your machine.
+Local voice-to-text for Windows. Press `Ctrl+Win`, talk, press again — your words are transcribed by Whisper and pasted wherever your cursor is. No cloud, no subscription, no audio leaving your machine.
 
 No cloud. No subscription. No screenshots sent to anyone's server.
 
