@@ -158,4 +158,4 @@ For architecture details see [ARCHITECTURE.md](ARCHITECTURE.md).
 
 ## Author
 
-[luckmattos](https://github.com/luckmattos) — built with [Claude Code](https://claude.com/claude-code) as pair programmer. MIT license.
+[luckmattos](https://github.com/luckmattos) - built with AI coding agents and tools. MIT license.
