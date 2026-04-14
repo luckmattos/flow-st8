@@ -2,9 +2,11 @@
 
 import logging
 import sys
+from logging.handlers import RotatingFileHandler
 
-from config import load_config
+from config import APP_DIR, load_config
 from app import FlowSt8App
+from version import __version__
 
 
 def _setup_utf8_stdio() -> None:
@@ -16,13 +18,30 @@ def _setup_utf8_stdio() -> None:
             pass
 
 
-def main() -> None:
-    _setup_utf8_stdio()
+def _setup_logging() -> None:
+    """Log to stderr and to a rotating file for startup diagnostics."""
+    APP_DIR.mkdir(parents=True, exist_ok=True)
+    handlers = [
+        logging.StreamHandler(sys.stderr),
+        RotatingFileHandler(
+            APP_DIR / "flow-st8.log",
+            maxBytes=512_000,
+            backupCount=2,
+            encoding="utf-8",
+        ),
+    ]
     logging.basicConfig(
         level=logging.INFO,
         format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
         datefmt="%H:%M:%S",
+        handlers=handlers,
+        force=True,
     )
+
+
+def main() -> None:
+    _setup_utf8_stdio()
+    _setup_logging()
     log = logging.getLogger("flow-st8")
 
     log.info("Loading configuration...")
@@ -31,9 +50,14 @@ def main() -> None:
     import autostart
     autostart.sync(config.startup.autostart)
 
-    log.info("Starting flow-st8 (model=%s, hotkey=%s, vad=%s, autostart=%s)",
-             config.model.name, config.hotkey.key, config.vad.enabled,
-             config.startup.autostart)
+    log.info(
+        "Starting flow-st8 v%s (model=%s, hotkey=%s, vad=%s, autostart=%s)",
+        __version__,
+        config.model.name,
+        config.hotkey.key,
+        config.vad.enabled,
+        config.startup.autostart,
+    )
 
     app = FlowSt8App(config)
     app.start()

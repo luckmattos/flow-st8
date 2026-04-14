@@ -38,6 +38,8 @@ class FlowSt8App:
     def start(self) -> None:
         """Start background services. Call tray.run() after this (blocks main thread)."""
         self._executor.submit(self.transcriber.preload)
+        if self.vad:
+            self._executor.submit(self.vad.preload)
         self.hotkey.start()
         log.info("flow-st8 started. Press %s to record.", self.config.hotkey.key)
 
