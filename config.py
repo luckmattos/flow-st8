@@ -181,6 +181,12 @@ def _save_config(config: Config) -> None:
     CONFIG_PATH.write_text(_serialize_config(config), encoding="utf-8")
 
 
+def save_config(config: Config) -> None:
+    """Persist the current config to disk."""
+    APP_DIR.mkdir(parents=True, exist_ok=True)
+    _save_config(config)
+
+
 def _migrate_legacy_dir() -> None:
     """Move old %APPDATA%/whisprflow -> %APPDATA%/flow-st8 (one-shot)."""
     legacy_dir = Path(os.environ.get("APPDATA", "")) / "whisprflow"

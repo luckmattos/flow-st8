@@ -7,6 +7,8 @@ import pystray
 from PIL import Image, ImageDraw
 
 import autostart
+from config import save_config
+from version import __version__
 
 if TYPE_CHECKING:
     from app import FlowSt8App
@@ -66,6 +68,11 @@ class TrayIcon:
                 None,
                 enabled=False,
             ),
+            pystray.MenuItem(
+                lambda _: f"Versao: {__version__}",
+                None,
+                enabled=False,
+            ),
             pystray.Menu.SEPARATOR,
             pystray.MenuItem(
                 "Iniciar com Windows",
@@ -92,9 +99,15 @@ class TrayIcon:
 
     def _toggle_autostart(self) -> None:
         if autostart.is_enabled():
-            autostart.disable()
+            if autostart.disable():
+                self._app.config.startup.autostart = False
+                save_config(self._app.config)
+                log.info("Autostart disabled from tray and persisted to config.")
         else:
-            autostart.enable()
+            if autostart.enable():
+                self._app.config.startup.autostart = True
+                save_config(self._app.config)
+                log.info("Autostart enabled from tray and persisted to config.")
 
     def _quit(self) -> None:
         self._app.shutdown()
