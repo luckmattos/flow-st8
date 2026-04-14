@@ -5,26 +5,34 @@
 - This repository uses Semantic Versioning.
 - The canonical version lives in `VERSION`.
 - Runtime code reads that value from `version.py`.
+- `release-please` updates `VERSION`, `CHANGELOG.md`, the Git tag, and the GitHub Release.
 
-## Release Checklist
+## Day-To-Day Flow
 
-1. Update `VERSION`.
-2. Add a new entry to `CHANGELOG.md`.
-3. Commit the release prep.
-4. Create an annotated tag like `v0.1.0`.
-5. Push the commit and tag to GitHub.
+1. Merge changes into `main` using Conventional Commits when possible.
+2. `release-please` opens or updates a Release PR.
+3. Review that PR like any other change.
+4. Merge the Release PR when you're ready to publish.
+5. `release-please` creates the tag and GitHub Release automatically.
 
-## Commands
+## Commit Conventions
 
-```powershell
-git add VERSION CHANGELOG.md
-git commit -m "chore: release v0.1.0"
-git tag -a v0.1.0 -m "flow-st8 v0.1.0"
-git push origin main
-git push origin v0.1.0
-```
+- `feat:` triggers a minor release.
+- `fix:` triggers a patch release.
+- `feat!:` or `BREAKING CHANGE:` triggers a major release.
+- `chore:`, `docs:`, and similar commit types normally do not trigger a release.
+
+## Manual Overrides
+
+- To force a specific version, add `Release-As: x.y.z` in the commit body.
+- To improve generated notes, prefer squash merges with a clean final commit message.
 
 ## GitHub Automation
 
 - `.github/workflows/ci.yml` validates the repo on pushes and pull requests.
-- `.github/workflows/release.yml` creates a GitHub Release automatically when a `v*` tag is pushed.
+- `.github/workflows/release-please.yml` manages Release PRs and GitHub Releases.
+
+## Notes
+
+- If you want CI to run on Release PRs opened by the bot, configure a PAT-based token and wire it into the workflow later.
+- The current manifest starts at `0.1.0`, matching the existing `v0.1.0` tag.
