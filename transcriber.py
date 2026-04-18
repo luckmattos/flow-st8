@@ -1,6 +1,7 @@
 """Whisper transcription wrapper with lazy loading."""
 
 import logging
+import re
 import threading
 
 import numpy as np
@@ -43,11 +44,12 @@ class Transcriber:
         self._ensure_loaded()
 
         # Energy check - reject if audio is essentially silent.
-        # Avoids Whisper hallucinations on empty input.
         rms = float(np.sqrt(np.mean(audio ** 2)))
         if rms < 0.005:
             log.info("Audio RMS too low (%.5f), skipping transcription.", rms)
             return ""
+
+        audio = _trim_trailing_silence(audio)
 
         with self._lock:
             result = whisper.transcribe(
@@ -57,12 +59,15 @@ class Transcriber:
                 fp16=self._use_fp16,
                 task="transcribe",
                 initial_prompt=self._config.initial_prompt or None,
+                # condition_on_previous_text=False prevents the decoder feedback
+                # loop that causes repetitive hallucinations on trailing silence.
+                condition_on_previous_text=False,
                 no_speech_threshold=0.6,
+                logprob_threshold=-1.0,
                 compression_ratio_threshold=2.4,
-                temperature=(0.0, 0.2, 0.4, 0.6, 0.8, 1.0),
+                temperature=(0.0,),
             )
 
-        # Filter out segments where the model is uncertain (likely hallucinations)
         segments = result.get("segments", [])
         good_segments = [
             s for s in segments if s.get("no_speech_prob", 0.0) < 0.6
@@ -75,13 +80,32 @@ class Transcriber:
         return _postprocess(text)
 
 
+def _trim_trailing_silence(
+    audio: np.ndarray, sample_rate: int = 16000, threshold: float = 0.01
+) -> np.ndarray:
+    """Remove trailing silence to reduce hallucination surface."""
+    window = sample_rate // 10  # 100ms windows
+    for i in range(len(audio) - window, 0, -window):
+        if np.abs(audio[i : i + window]).mean() > threshold:
+            return audio[: i + window]
+    return audio
+
+
+def _remove_repetition_loops(text: str) -> str:
+    """Remove trailing repetition loops — a Whisper hallucination artifact."""
+    pattern = r"(.{10,}?)(?:\1){2,}$"
+    match = re.search(pattern, text, re.IGNORECASE)
+    if match:
+        text = text[: match.start()] + match.group(1)
+    return text.strip()
+
+
 def _postprocess(text: str) -> str:
     """Light cleanup of transcribed text."""
     if not text:
         return text
-    # Remove multiple spaces
     while "  " in text:
         text = text.replace("  ", " ")
-    # Capitalize first letter
+    text = _remove_repetition_loops(text)
     text = text[0].upper() + text[1:] if len(text) > 1 else text.upper()
-    return text
+    return text.strip()
