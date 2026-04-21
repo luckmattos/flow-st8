@@ -51,10 +51,23 @@ A mic icon appears in the system tray. You're ready.
 
 1. Press `Ctrl+Win` — icon turns red, recording starts
 2. Talk — pause freely, silence is filtered out automatically
-3. Press `Ctrl+Win` again — icon turns blue, transcribing
+3. Press `Ctrl+Win` again — icon turns blue, trailing silence is trimmed before transcription
 4. Text is pasted wherever your cursor is
 
 **Tray menu:** right-click the icon to record, toggle autostart, or quit.
+
+---
+
+## Hallucination safeguards
+
+To reduce Whisper hallucinations at the end of longer dictations, flow-st8:
+
+- Trims trailing silence before sending audio to Whisper
+- Disables decoder feedback with `condition_on_previous_text=False`
+- Uses stricter decoding settings to reject low-confidence tails
+- Removes repeated trailing loops as a final cleanup step
+
+These safeguards were added after repetitive end-of-text loops were observed on long transcriptions.
 
 ---
 
