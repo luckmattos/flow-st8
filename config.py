@@ -8,20 +8,33 @@ from pathlib import Path
 APP_DIR = Path(os.environ.get("APPDATA", "")) / "flow-st8"
 CONFIG_PATH = APP_DIR / "config.toml"
 
+WHISPER_MODELS: list[tuple[str, str]] = [
+    ("tiny",           "tiny           — rápido, qualidade baixa"),
+    ("base",           "base           — equilibrado, CPU ok"),
+    ("small",          "small          — boa qualidade, CPU ok"),
+    ("medium",         "medium         — ótima qualidade ★ GPU"),
+    ("large-v3-turbo", "large-v3-turbo — melhor qualidade ★ GPU"),
+]
+
+_HOTKEY_MODIFIERS = {"ctrl", "control", "win", "super", "shift", "alt"}
+
 DEFAULT_CONFIG_TOML = """\
 [model]
 # Opcoes: "tiny", "base", "small", "medium", "large-v3-turbo"
 # large-v3-turbo: melhor qualidade, ~0.5s em GPU CUDA, ~10-20s em CPU
 name = "large-v3-turbo"
-language = "pt"
-# Prompt inicial melhora qualidade pt-BR sem trocar modelo
-initial_prompt = "Transcrição em português brasileiro."
+# "auto" detecta o idioma automaticamente; ou force "pt", "en", etc.
+language = "auto"
+# Prompt inicial so e usado quando language != "auto"
+initial_prompt = ""
 
 [hotkey]
 # Modos: "toggle" (press start/stop) ou "push_to_talk" (segura para gravar)
 mode = "toggle"
-# Formato: modificadores+tecla. Ex: "ctrl+win", "ctrl+alt+r"
-key = "ctrl+win"
+# hold_key: segurar para gravar (push-to-talk)
+hold_key = "ctrl+win"
+# toggle_key: pressionar para iniciar/parar
+toggle_key = "ctrl+win+o"
 
 [audio]
 # -1 = microfone padrao do sistema
@@ -45,8 +58,8 @@ speech_threshold = 0.5
 [injection]
 # Metodo: "clipboard" (Ctrl+V) ou "sendinput" (char por char)
 method = "clipboard"
-# Restaurar clipboard anterior apos colar
-restore_clipboard = true
+# Keep transcribed text as the most recent clipboard item
+restore_clipboard = false
 
 [feedback]
 # Beeps sonoros para indicar estado
@@ -60,15 +73,21 @@ autostart = true
 @dataclass
 class ModelConfig:
     name: str = "large-v3-turbo"
-    language: str = "pt"
-    initial_prompt: str = "Transcrição em português brasileiro."
+    language: str = "auto"
+    initial_prompt: str = ""
 
 
 @dataclass
 class HotkeyConfig:
     mode: str = "toggle"
-    key: str = "ctrl+win"
+    hold_key: str = "ctrl+win"
+    toggle_key: str = "ctrl+win+o"
     stop_key: str = "space"
+
+    @property
+    def key(self) -> str:
+        """Compat: returns hold_key (used in legacy log messages)."""
+        return self.hold_key
 
 
 @dataclass
@@ -96,7 +115,7 @@ class VADConfig:
 @dataclass
 class InjectionConfig:
     method: str = "clipboard"
-    restore_clipboard: bool = True
+    restore_clipboard: bool = False
 
 
 @dataclass
@@ -132,6 +151,15 @@ def _dict_to_config(data: dict) -> Config:
     )
 
 
+def _hotkey_parts(hotkey: str) -> set[str]:
+    return {part.strip().lower() for part in hotkey.split("+") if part.strip()}
+
+
+def _is_modifier_only_hotkey(hotkey: str) -> bool:
+    parts = _hotkey_parts(hotkey)
+    return bool(parts) and parts <= _HOTKEY_MODIFIERS
+
+
 def _serialize_config(config: Config) -> str:
     return f"""[model]
 name = "{config.model.name}"
@@ -140,7 +168,8 @@ initial_prompt = "{config.model.initial_prompt}"
 
 [hotkey]
 mode = "{config.hotkey.mode}"
-key = "{config.hotkey.key}"
+hold_key = "{config.hotkey.hold_key}"
+toggle_key = "{config.hotkey.toggle_key}"
 stop_key = "{config.hotkey.stop_key}"
 
 [audio]
@@ -207,10 +236,21 @@ def load_config() -> Config:
 
     dirty = False
 
-    legacy_keys = {"ctrl+shift+space", "ctrl+win+space"}
-    if data.get("hotkey", {}).get("key") in legacy_keys:
-        data.setdefault("hotkey", {})["key"] = "ctrl+win"
-        data["hotkey"]["mode"] = "toggle"
+    hotkey_data = data.setdefault("hotkey", {})
+    # Migrate old "key" field → "hold_key"
+    if "key" in hotkey_data and "hold_key" not in hotkey_data:
+        old_key = hotkey_data.pop("key")
+        legacy_keys = {"ctrl+shift+space", "ctrl+win+space"}
+        hotkey_data["hold_key"] = "ctrl+win" if old_key in legacy_keys else old_key
+        dirty = True
+    if "toggle_key" not in hotkey_data:
+        hotkey_data["toggle_key"] = "ctrl+win+o"
+        dirty = True
+    if not _is_modifier_only_hotkey(str(hotkey_data.get("hold_key", ""))):
+        old_hold_key = str(hotkey_data.get("hold_key", "")).strip().lower()
+        hotkey_data["hold_key"] = "ctrl+win"
+        if old_hold_key and "+" not in old_hold_key:
+            hotkey_data["toggle_key"] = f"ctrl+win+{old_hold_key}"
         dirty = True
 
     if data.get("model", {}).get("name") == "base":
@@ -219,6 +259,11 @@ def load_config() -> Config:
 
     if data.get("audio", {}).get("max_seconds", 0) < 210:
         data.setdefault("audio", {})["max_seconds"] = 210
+        dirty = True
+
+    # Flip restore_clipboard to false — transcribed text should stay as latest clipboard item
+    if data.get("injection", {}).get("restore_clipboard", False):
+        data.setdefault("injection", {})["restore_clipboard"] = False
         dirty = True
 
     if dirty:

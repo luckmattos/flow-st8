@@ -1,0 +1,40 @@
+name: Build Release
+
+on:
+  release:
+    types: [published]
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: windows-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install build tools
+        run: pip install pyinstaller
+
+      - name: Build installer EXE
+        run: >
+          pyinstaller --onefile --windowed
+          --icon assets/icon.ico
+          --add-data "assets/icon.png;assets"
+          --name flow-st8-setup
+          installer.py
+
+      - name: Read version
+        id: version
+        shell: bash
+        run: echo "version=$(cat VERSION)" >> "$GITHUB_OUTPUT"
+
+      - name: Upload installer to release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: dist/flow-st8-setup.exe

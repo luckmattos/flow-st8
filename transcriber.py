@@ -35,12 +35,24 @@ class Transcriber:
                 )
         log.info("Whisper model loaded.")
 
+    def reload(self, new_config: "ModelConfig") -> None:
+        """Swap model in-place (call from background thread)."""
+        log.info("Reloading Whisper model '%s'...", new_config.name)
+        with self._lock:
+            self._model = None
+            self._config = new_config
+        self.preload()
+
     def _ensure_loaded(self) -> None:
         if self._model is None:
             self.preload()
 
-    def transcribe(self, audio: np.ndarray) -> str:
-        """Transcribe float32 16kHz mono audio. Returns cleaned text."""
+    def transcribe(self, audio: np.ndarray, context_hint: str | None = None) -> str:
+        """Transcribe float32 16kHz mono audio. Returns cleaned text.
+
+        context_hint: tail of previous segment text — used as initial_prompt for
+        coherence in streaming mode (ignored when language == 'auto').
+        """
         self._ensure_loaded()
 
         # Energy check - reject if audio is essentially silent.
@@ -51,14 +63,20 @@ class Transcriber:
 
         audio = _trim_trailing_silence(audio)
 
+        lang = None if self._config.language == "auto" else self._config.language
+        if lang is None:
+            prompt = None
+        else:
+            prompt = context_hint or self._config.initial_prompt or None
+
         with self._lock:
             result = whisper.transcribe(
                 self._model,
                 audio,
-                language=self._config.language,
+                language=lang,
                 fp16=self._use_fp16,
                 task="transcribe",
-                initial_prompt=self._config.initial_prompt or None,
+                initial_prompt=prompt,
                 # condition_on_previous_text=False prevents the decoder feedback
                 # loop that causes repetitive hallucinations on trailing silence.
                 condition_on_previous_text=False,
@@ -81,13 +99,15 @@ class Transcriber:
 
 
 def _trim_trailing_silence(
-    audio: np.ndarray, sample_rate: int = 16000, threshold: float = 0.01
+    audio: np.ndarray, sample_rate: int = 16000, threshold: float = 0.003
 ) -> np.ndarray:
     """Remove trailing silence to reduce hallucination surface."""
-    window = sample_rate // 10  # 100ms windows
+    window = sample_rate // 10   # 100ms windows
+    tail_pad = sample_rate // 5  # 200ms buffer after last active window
     for i in range(len(audio) - window, 0, -window):
         if np.abs(audio[i : i + window]).mean() > threshold:
-            return audio[: i + window]
+            end = min(len(audio), i + window + tail_pad)
+            return audio[:end]
     return audio
 
 

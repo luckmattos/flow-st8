@@ -6,6 +6,26 @@ The format is inspired by Keep a Changelog and this project follows Semantic Ver
 
 ## [Unreleased]
 
+## [0.2.0] - 2026-05-08
+
+### Added
+- Packaged Windows app build via `flow-st8.spec`.
+- Windows setup wizard with hardware detection, model selection, autostart option, existing-install notice, and branded header.
+- New flow-st8 logo assets, executable icon, GitHub README banner, and tray icon branding.
+- Bottom-right live recording badge using the logo and audio-reactive bars.
+- GitHub release build workflow for the setup executable.
+
+### Changed
+- Migrated hotkeys to `hold_key` (`Ctrl+Win`) and `toggle_key` (`Ctrl+Win+O`) with config self-healing for old single-key values.
+- The app now keeps transcribed text as the latest clipboard item by default.
+- README was refreshed for public install, usage, privacy, and packaging guidance.
+
+### Fixed
+- PyInstaller packaging now bundles Silero VAD model data required by the frozen app.
+- PyInstaller packaging now bundles Whisper assets, including `mel_filters.npz`.
+- The setup license screen no longer blocks progress when the checkbox row is clipped.
+- Overlay art now respects transparent PNG assets.
+
 ### Fixed
 - Whisper hallucination loop on long transcriptions: added `condition_on_previous_text=False`, `logprob_threshold=-1.0`, simplified temperature to `(0.0,)`, trailing-silence trim, and repetition-loop post-processing.
 
