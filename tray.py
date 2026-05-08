@@ -1,13 +1,15 @@
 """System tray icon with state feedback."""
 
 import logging
+import sys
+from pathlib import Path
 from typing import TYPE_CHECKING
 
 import pystray
 from PIL import Image, ImageDraw
 
 import autostart
-from config import save_config
+from config import WHISPER_MODELS, save_config
 from version import __version__
 
 if TYPE_CHECKING:
@@ -22,21 +24,37 @@ COLORS = {
     "error": (220, 120, 50),
 }
 
+_ARTBOARD_RGB = (244, 243, 241)
+
+
+def _resource_path(relative: str) -> Path:
+    base = Path(getattr(sys, "_MEIPASS", Path(__file__).resolve().parent))
+    return base / relative
+
+
+def _remove_artboard(image: Image.Image) -> Image.Image:
+    """Turn the exported off-white artboard into transparency."""
+    image = image.convert("RGBA")
+    pixels = image.load()
+    w, h = image.size
+    for y in range(h):
+        for x in range(w):
+            r, g, b, a = pixels[x, y]
+            if a and abs(r - _ARTBOARD_RGB[0]) <= 3 and abs(g - _ARTBOARD_RGB[1]) <= 3 and abs(b - _ARTBOARD_RGB[2]) <= 3:
+                pixels[x, y] = (r, g, b, 0)
+    return image
+
 
 def _make_icon(state: str) -> Image.Image:
-    """Generate a 64x64 tray icon with mic symbol."""
+    """Create the tray icon from the app logo plus a small state badge."""
     color = COLORS.get(state, COLORS["idle"])
-    img = Image.new("RGBA", (64, 64), (0, 0, 0, 0))
+    try:
+        img = _remove_artboard(Image.open(_resource_path("assets/icon.png")))
+        img = img.resize((64, 64), Image.Resampling.LANCZOS)
+    except Exception:
+        img = Image.new("RGBA", (64, 64), (0, 0, 0, 0))
     draw = ImageDraw.Draw(img)
-    # Circle background
-    draw.ellipse([4, 4, 60, 60], fill=(*color, 255))
-    # Mic body
-    draw.rounded_rectangle([26, 14, 38, 36], radius=4, fill=(255, 255, 255, 200))
-    # Mic arc
-    draw.arc([20, 26, 44, 46], 0, 180, fill=(255, 255, 255, 200), width=3)
-    # Mic stand
-    draw.line([32, 46, 32, 54], fill=(255, 255, 255, 200), width=2)
-    draw.line([26, 54, 38, 54], fill=(255, 255, 255, 200), width=2)
+    draw.ellipse([44, 44, 62, 62], fill=(*color, 255), outline=(45, 49, 38, 255), width=2)
     return img
 
 
@@ -55,41 +73,79 @@ class TrayIcon:
             pystray.MenuItem("flow-st8", None, enabled=False),
             pystray.Menu.SEPARATOR,
             pystray.MenuItem(
-                "Gravar / Parar",
+                "Record / Stop",
                 lambda: self._app.on_hotkey(),
             ),
             pystray.MenuItem(
-                lambda _: f"Modelo: {self._app.config.model.name}",
-                None,
-                enabled=False,
+                "Model",
+                pystray.Menu(
+                    *[
+                        pystray.MenuItem(
+                            label,
+                            self._make_model_callback(name),
+                            checked=self._make_model_checked(name),
+                            radio=True,
+                        )
+                        for name, label in WHISPER_MODELS
+                    ],
+                    pystray.Menu.SEPARATOR,
+                    pystray.MenuItem(
+                        "Loading model...",
+                        None,
+                        enabled=False,
+                        visible=lambda _: self._app.is_model_loading,
+                    ),
+                ),
             ),
             pystray.MenuItem(
-                lambda _: f"Hotkey: {self._app.config.hotkey.key}",
-                None,
-                enabled=False,
+                "Hotkeys",
+                pystray.Menu(
+                    pystray.MenuItem("Click an item below to remap", None, enabled=False),
+                    pystray.MenuItem(
+                        lambda _: f"Hold (press and hold): {self._app.config.hotkey.hold_key}",
+                        lambda _: self._app.start_hotkey_capture("hold"),
+                    ),
+                    pystray.MenuItem(
+                        lambda _: f"Toggle (hold + extra key): {self._app.config.hotkey.toggle_key}",
+                        lambda _: self._app.start_hotkey_capture("toggle"),
+                    ),
+                ),
             ),
             pystray.MenuItem(
-                lambda _: f"Versao: {__version__}",
+                lambda _: f"Version: {__version__}",
                 None,
                 enabled=False,
             ),
             pystray.Menu.SEPARATOR,
             pystray.MenuItem(
-                "Iniciar com Windows",
+                "Start with Windows",
                 self._toggle_autostart,
                 checked=lambda _: autostart.is_enabled(),
             ),
-            pystray.MenuItem("Sair", self._quit),
+            pystray.MenuItem("Quit", self._quit),
         )
+
+    def _make_model_callback(self, name: str):
+        return lambda _: self._app.switch_model(name)
+
+    def _make_model_checked(self, name: str):
+        return lambda _: self._app.config.model.name == name
+
+    def notify(self, message: str, title: str = "flow-st8") -> None:
+        """Show a system balloon notification."""
+        self._icon.notify(message, title)
+
+    def set_title(self, title: str) -> None:
+        self._icon.title = title
 
     def set_state(self, state: str) -> None:
         """Update icon and tooltip. Safe to call from any thread."""
         self._icon.icon = _make_icon(state)
         titles = {
             "idle": "flow-st8 — Idle",
-            "recording": "flow-st8 — Gravando...",
-            "processing": "flow-st8 — Transcrevendo...",
-            "error": "flow-st8 — Erro",
+            "recording": "flow-st8 — Recording...",
+            "processing": "flow-st8 — Transcribing...",
+            "error": "flow-st8 — Error",
         }
         self._icon.title = titles.get(state, f"flow-st8 — {state}")
 

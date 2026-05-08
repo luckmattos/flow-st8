@@ -24,6 +24,9 @@ ENV/
 # Claude Code tooling (dev sessions, memory)
 .claude/
 
+# Internal dev docs (not for public repo)
+docs/
+
 # OS
 .DS_Store
 Thumbs.db

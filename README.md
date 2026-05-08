@@ -1,117 +1,104 @@
 # flow-st8
 
-![flow-st8](banner.svg)
+![flow-st8](assets/banner.svg)
 
-Local voice-to-text for Windows. Press `Ctrl+Win`, talk, press again — your words are transcribed by Whisper and pasted wherever your cursor is. No cloud, no subscription, no audio leaving your machine.
-
-No cloud. No subscription. No screenshots sent to anyone's server.
+Local voice-to-text for Windows. Hold `Ctrl+Win` to record, release to transcribe, and flow-st8 pastes your words wherever your cursor is. No cloud, no subscription, no audio leaving your machine.
 
 ---
 
-## Requirements
+## Highlights
 
-- Windows 10/11
-- Python 3.11+
-- Microphone
-- NVIDIA GPU recommended (RTX 20xx/30xx/40xx) — also works on CPU, slower
+- Local Whisper transcription with GPU acceleration when available
+- Push-to-talk and hands-free toggle hotkeys
+- Live recording badge with audio-reactive bars
+- System tray menu for model switching, hotkey remapping, autostart, and quit
+- Packaged Windows installer and app executable
+- Privacy-first: audio is processed locally and discarded
 
 ---
 
 ## Install
 
+Download and run the latest `flow-st8-setup.exe` from GitHub Releases.
+
+The setup wizard detects your hardware, installs dependencies, writes config, creates a desktop shortcut, and can enable autostart.
+
+For development:
+
 ```bash
 git clone https://github.com/luckmattos/flow-st8.git
 cd flow-st8
-
 python install.py
 ```
-
-`install.py` detects your hardware and installs the right PyTorch version automatically:
-- NVIDIA GPU found → installs CUDA build (~2.7GB, transcription <1s)
-- No GPU → installs CPU build (lighter, slower transcription)
-
-On first run, Whisper downloads the model (~1.5GB, one time only).
 
 ---
 
 ## Run
 
-Double-click `flow-st8.vbs` — no terminal, no console window.
+Installed users can launch flow-st8 from the desktop shortcut or startup entry.
 
-Or from terminal:
+Development users can run:
+
 ```bash
 python main.py
 ```
 
-A mic icon appears in the system tray. You're ready.
+The app lives in the system tray while it listens for hotkeys.
 
 ---
 
-## How to use
+## How To Use
 
-1. Press `Ctrl+Win` — icon turns red, recording starts
-2. Talk — pause freely, silence is filtered out automatically
-3. Press `Ctrl+Win` again — icon turns blue, trailing silence is trimmed before transcription
-4. Text is pasted wherever your cursor is
+| Hotkey | Behavior |
+|---|---|
+| Hold `Ctrl+Win` | Push-to-talk: hold to record, release to transcribe |
+| Press `Ctrl+Win+O` | Toggle: press to start, press again to stop |
 
-**Tray menu:** right-click the icon to record, toggle autostart, or quit.
+1. Hold `Ctrl+Win`; the floating badge appears and reacts to your voice.
+2. Talk normally; silence is filtered with VAD.
+3. Release `Ctrl+Win`; flow-st8 transcribes and pastes the text.
 
----
-
-## Hallucination safeguards
-
-To reduce Whisper hallucinations at the end of longer dictations, flow-st8:
-
-- Trims trailing silence before sending audio to Whisper
-- Disables decoder feedback with `condition_on_previous_text=False`
-- Uses stricter decoding settings to reject low-confidence tails
-- Removes repeated trailing loops as a final cleanup step
-
-These safeguards were added after repetitive end-of-text loops were observed on long transcriptions.
+Tip: press `Ctrl+Win+O` mid-hold to lock recording in hands-free mode.
 
 ---
 
-## Choosing a model
+## App vs Installer
 
-Edit `%APPDATA%\flow-st8\config.toml` and change `name` under `[model]`.
+| File | Purpose |
+|---|---|
+| `flow-st8.exe` | The actual background app: hotkeys, recording, transcription, overlay, tray |
+| `flow-st8-setup.exe` | The setup wizard: installs/updates files, dependencies, config, shortcuts |
 
-| Model | Size | With NVIDIA GPU | CPU only | Quality |
-|---|---|---|---|---|
-| `tiny` | 39 MB | ~0.1s | 1-2s | Low, hallucinates |
-| `base` | 138 MB | ~0.3s | 3-5s | Decent |
-| `small` | 460 MB | ~0.7s | 8-12s | Good — best for CPU |
-| `medium` | 1.5 GB | ~1.5s | 25-35s | Very good |
-| `large-v3-turbo` | 1.5 GB | ~0.4-1.2s ⭐ | 20-45s | Excellent (default) |
-
-> **No GPU?** Stick with `base` or `small`. Running `large-v3-turbo` on CPU means waiting 20-45 seconds per sentence — not practical.
-
-**Benchmarks on RTX 4060 Laptop 8GB with `large-v3-turbo`:**
-
-| Speech duration | GPU latency | CPU latency |
-|---|---|---|
-| 5s | ~0.4s | ~8s |
-| 15s | ~1.2s | ~25s |
-| 30s | ~2.5s | ~45s |
+The installer is not the daily app. After setup, run `flow-st8.exe` or the shortcut created by the installer.
 
 ---
 
 ## Configuration
 
-Config file: `%APPDATA%\flow-st8\config.toml` (auto-created on first run)
+Config file:
+
+```text
+%APPDATA%\flow-st8\config.toml
+```
+
+Example:
 
 ```toml
 [model]
-name = "large-v3-turbo"   # tiny | base | small | medium | large-v3-turbo
-language = "pt"
-initial_prompt = "Transcription in Brazilian Portuguese."
+name = "large-v3-turbo"
+language = "auto"
+initial_prompt = ""
 
 [hotkey]
-mode = "toggle"           # toggle = press to start, press to stop
-key = "ctrl+win"
+hold_key = "ctrl+win"
+toggle_key = "ctrl+win+o"
 
 [audio]
-device_index = -1         # -1 = system default mic
-max_seconds = 210         # 3m30s max per recording
+device_index = -1
+sample_rate = 16000
+channels = 1
+chunk_ms = 32
+max_seconds = 210
 gain = 1.8
 
 [vad]
@@ -119,22 +106,35 @@ enabled = true
 speech_threshold = 0.5
 
 [startup]
-autostart = true          # start with Windows
+autostart = true
 ```
+
+---
+
+## Models
+
+| Model | Size | GPU | CPU | Quality |
+|---|---:|---:|---:|---|
+| `tiny` | 39 MB | ~0.1s | 1-2s | Low |
+| `base` | 138 MB | ~0.3s | 3-5s | Decent |
+| `small` | 460 MB | ~0.7s | 8-12s | Good |
+| `medium` | 1.5 GB | ~1.5s | 25-35s | Very good |
+| `large-v3-turbo` | 1.5 GB | ~0.4-1.2s | 20-45s | Excellent |
+
+No GPU? Use `base` or `small` for a practical experience.
 
 ---
 
 ## Privacy
 
-Commercial voice dictation apps send your audio — and often screenshots of your screen — to their servers every time you speak.
-
 flow-st8 does not:
+
 - Send audio anywhere
 - Capture screenshots
-- Require internet
-- Store anything outside your machine
+- Require internet after models are downloaded
+- Store your recordings
 
-Everything runs locally. Audio is processed and discarded.
+Everything runs locally.
 
 ---
 
@@ -142,33 +142,27 @@ Everything runs locally. Audio is processed and discarded.
 
 | Layer | Technology |
 |---|---|
-| Speech-to-text | [OpenAI Whisper](https://github.com/openai/whisper) + PyTorch |
-| Voice detection | [Silero VAD v6](https://github.com/snakers4/silero-vad) |
-| Global hotkey | Win32 `WH_KEYBOARD_LL` hook via `ctypes` |
-| Audio capture | [sounddevice](https://python-sounddevice.readthedocs.io/) |
-| Text injection | pyperclip + Win32 `SendInput` |
-| Tray icon | [pystray](https://github.com/moses-palmer/pystray) + Pillow |
-| Config | TOML via stdlib `tomllib` |
-| Autostart | `winreg` → `HKCU\...\Run` |
-
-For architecture details see [ARCHITECTURE.md](ARCHITECTURE.md).
+| Speech-to-text | OpenAI Whisper + PyTorch |
+| Voice detection | Silero VAD |
+| Global hotkey | Win32 low-level keyboard hook via `ctypes` |
+| Audio capture | `sounddevice` |
+| Text injection | Clipboard + Win32 `SendInput` |
+| UI | Tkinter overlay + pystray |
+| Packaging | PyInstaller |
 
 ---
 
 ## Roadmap
 
-- [ ] Packaged `.exe` installer
+- [x] Packaged Windows app
+- [x] Setup wizard
+- [x] Live audio overlay
 - [ ] Auto-updater
-- [ ] Language auto-detect
 - [ ] Transcription history
 - [ ] Per-app custom prompts
 
 ---
 
-**Keywords:** speech-to-text, voice-dictation, whisper, local, offline, privacy, windows, cuda, python, real-time, hotkey
-
----
-
 ## Author
 
-[luckmattos](https://github.com/luckmattos) - built with AI coding agents and tools. MIT license.
+[luckmattos](https://github.com/luckmattos). MIT license.
