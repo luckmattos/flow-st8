@@ -20,6 +20,8 @@ class Transcriber:
         self._lock = threading.Lock()
         self._device = "cuda" if torch.cuda.is_available() else "cpu"
         self._use_fp16 = self._device == "cuda"
+        # When language == "auto", detection is restricted to these only.
+        self._allowed_langs = ("pt", "en")
 
     def preload(self) -> None:
         """Load model in advance (call from background thread at startup)."""
@@ -47,6 +49,33 @@ class Transcriber:
         if self._model is None:
             self.preload()
 
+    def _detect_restricted_lang(self, audio: np.ndarray) -> str:
+        """Detect language but restrict the choice to self._allowed_langs.
+
+        Whisper has no native way to limit auto-detect to a subset, so we read
+        the full language-probability distribution and pick the most likely
+        among the allowed set. Anything else (e.g. Arabic) can never be chosen.
+        """
+        try:
+            mel = whisper.log_mel_spectrogram(
+                whisper.pad_or_trim(audio),
+                n_mels=self._model.dims.n_mels,
+            ).to(self._model.device)
+            if self._use_fp16:
+                mel = mel.half()
+            _, probs = self._model.detect_language(mel)
+            best = max(self._allowed_langs, key=lambda l: probs.get(l, 0.0))
+            log.info(
+                "Restricted lang detect: pt=%.2f en=%.2f -> %s",
+                probs.get("pt", 0.0),
+                probs.get("en", 0.0),
+                best,
+            )
+            return best
+        except Exception:
+            log.exception("Language detection failed, defaulting to pt.")
+            return self._allowed_langs[0]
+
     def transcribe(self, audio: np.ndarray, context_hint: str | None = None) -> str:
         """Transcribe float32 16kHz mono audio. Returns cleaned text.
 
@@ -63,11 +92,13 @@ class Transcriber:
 
         audio = _trim_trailing_silence(audio)
 
-        lang = None if self._config.language == "auto" else self._config.language
-        if lang is None:
-            prompt = None
+        if self._config.language == "auto":
+            # Restricted auto-detect: only pt or en, never other languages.
+            lang = self._detect_restricted_lang(audio)
         else:
-            prompt = context_hint or self._config.initial_prompt or None
+            lang = self._config.language
+
+        prompt = context_hint or self._config.initial_prompt or None
 
         with self._lock:
             result = whisper.transcribe(
