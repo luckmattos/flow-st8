@@ -202,15 +202,10 @@ def _disable_startup_folder() -> bool:
 
 def enable() -> bool:
     _remove_legacy_registry()
-    ok, error = _enable_scheduled_task()
-    if ok:
-        _disable_startup_folder()
-        return True
-
-    log.warning(
-        "Task Scheduler autostart unavailable, falling back to Startup folder: %s",
-        error,
-    )
+    # Startup folder is the primary strategy: it does not require the elevated
+    # privileges that schtasks needs (which fail with "Access denied" for a
+    # non-admin login) and it reliably launches ~10s after login.
+    _disable_scheduled_task()
     return _enable_startup_folder()
 
 

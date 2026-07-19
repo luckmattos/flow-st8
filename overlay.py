@@ -80,8 +80,8 @@ class WaveOverlay:
     def show_message(self, text: str) -> None:
         self._queue.put(("message", text))
 
-    def show_loading(self) -> None:
-        self._queue.put(("loading",))
+    def show_loading(self, hint: str = "Carregando modelo…") -> None:
+        self._queue.put(("loading", hint))
 
     def show_hint(self, text: str) -> None:
         self._queue.put(("hint", text))
@@ -192,6 +192,7 @@ class WaveOverlay:
                     resize_needed = True
                 elif cmd == "loading":
                     self._mode = "loading"
+                    self._hint_text = item[1] if len(item) > 1 else ""
                     self._visible = True
                     self._root.deiconify()
                     newly_shown = True
@@ -228,6 +229,8 @@ class WaveOverlay:
 
         if self._hint_text:
             h += _HINT_H
+            hint_font = tkfont.Font(family="Segoe UI", size=7)
+            w = max(w, hint_font.measure(self._hint_text) + 16)
 
         if w == self._current_w and h == self._current_h:
             return

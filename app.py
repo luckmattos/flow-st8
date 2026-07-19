@@ -45,11 +45,24 @@ class FlowSt8App:
 
     def start(self) -> None:
         """Start background services. Call tray.run() after this (blocks main thread)."""
-        self._executor.submit(self.transcriber.preload)
+        self._model_loading = True
+        self.tray.set_state("processing")
+        self.tray.set_title("flow-st8 — Loading model...")
+        self.overlay.show_loading()
+        self._executor.submit(self._preload_with_feedback)
         if self.vad:
             self._executor.submit(self.vad.preload)
         self.hotkey.start()
         log.info("flow-st8 started. Press %s to record.", self.config.hotkey.key)
+
+    def _preload_with_feedback(self) -> None:
+        """Load the Whisper model at startup, showing a loading badge until ready."""
+        try:
+            self.transcriber.preload()
+        finally:
+            self._model_loading = False
+            self.overlay.hide()
+            self.tray.set_state("idle")
 
     @property
     def is_model_loading(self) -> bool:

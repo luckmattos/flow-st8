@@ -23,9 +23,10 @@ DEFAULT_CONFIG_TOML = """\
 # Opcoes: "tiny", "base", "small", "medium", "large-v3-turbo"
 # large-v3-turbo: melhor qualidade, ~0.5s em GPU CUDA, ~10-20s em CPU
 name = "large-v3-turbo"
-# "auto" detecta o idioma automaticamente; ou force "pt", "en", etc.
+# "auto" = detecta automaticamente entre portugues e ingles (nunca outros idiomas)
+# ou force um idioma especifico: "pt", "en", etc.
 language = "auto"
-# Prompt inicial so e usado quando language != "auto"
+# Prompt inicial para dar contexto ao modelo (usado sempre)
 initial_prompt = ""
 
 [hotkey]
