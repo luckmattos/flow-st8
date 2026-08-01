@@ -9,7 +9,7 @@ Rastreamento de trabalho em andamento. O `CLAUDE.md` aponta para cá.
 - Se uma decisão da seção **Decisões travadas** for revista, edite lá e registre o porquê — não deixe a decisão antiga viva em outro lugar.
 - Tarefas descobertas no meio do caminho entram na fase correspondente; não crie fase nova sem necessidade.
 
-**Estado atual: Fase 0 entregue, faltando o teste de regressão no Windows.** A Fase 5 foi parcialmente adiantada (pipeline de empacotamento pronto, mas sem app funcional para empacotar).
+**Estado atual: Fases 0 e 1 entregues.** Falta o teste de regressão da Fase 0 no Windows (sem acesso à máquina no momento). A Fase 5 foi parcialmente adiantada (pipeline de empacotamento pronto, mas sem app funcional para empacotar). Próximo passo: Fase 2 (macOS headless).
 
 ---
 
@@ -35,6 +35,8 @@ Não relitigar sem motivo novo.
 | 8 | No mac, overlay = **NSPanel no NSApp do pystray**; Tk fica só no Windows | Tk e AppKit disputam a main thread no macOS |
 | 9 | **Modelo não vai dentro do DMG** | 1,5 GB; download na primeira execução já está no fluxo |
 | 10 | A pasta é **`backends/`**, não `platform/` | `platform` é módulo da stdlib; um pacote com esse nome na raiz sombrearia o `platform.system()` que pystray, sounddevice e o PyInstaller usam |
+| 11 | Injeção no mac é **`CGEventKeyboardSetUnicodeString`**, não clipboard + Cmd+V | Cmd+V herda os modificadores fisicamente pressionados (o próprio atalho do app), reentra no nosso event tap corrompendo a máquina de estados, assume que o app de destino tem paste em Cmd+V, e sequestra o clipboard. O evento unicode não tem nenhum desses. Clipboard fica como *fallback* selecionável em `injection.method` |
+| 12 | Gatilho padrão no mac é **`ctrl+option`** (canônico `ctrl+alt`), **sem suprimir teclas** durante a gravação | Push-to-talk segura o acorde por 5-10s falando; com `ctrl+cmd` qualquer tecla encostada vira atalho de sistema — `Ctrl+Cmd+Q` **bloqueia a tela**. `Ctrl+Option+letra` não tem atalho destrutivo de sistema, então dispensa supressão. Bônus: já cabe no vocabulário de `core/keys.py` sem alteração |
 
 ---
 
@@ -68,25 +70,63 @@ Mover código, sem mudar lógica. Critério de saída: **regressão zero no Wind
 
 Responde se a Fase 4 é viável como planejada. Não escrever produto aqui.
 
-- [ ] Protótipo mínimo: `pystray` no backend Darwin + um `NSPanel` via pyobjc no mesmo `NSApplication`
-- [ ] Confirmar que o NSPanel não rouba foco (`canBecomeKey = False`) — se roubar, o Cmd+V vai para a janela errada
-- [ ] Confirmar update do ícone da barra a partir de outra thread
-- [ ] Registrar o resultado aqui e ajustar a Fase 4
+- [x] Protótipo mínimo: `pystray` no backend Darwin + um `NSPanel` via pyobjc no mesmo `NSApplication`
+- [x] Confirmar que o NSPanel não rouba foco (`canBecomeKey = False`) — se roubar, o Cmd+V vai para a janela errada
+- [x] Confirmar update do ícone da barra a partir de outra thread
+- [x] Registrar o resultado aqui e ajustar a Fase 4
 
-**Plano B se falhar:** primeira versão do mac sem overlay (só ícone na barra + beeps).
+### Resultado: passou em tudo. Plano B descartado.
+
+Executado em 2026-08-01 no macOS (Darwin 25.3, Apple Silicon), pystray 0.19.5,
+pyobjc 12.2.1.
+
+| Pergunta | Resultado |
+|---|---|
+| pystray Darwin roda um `NSApplication` de verdade? | Sim — `NSApplication.sharedApplication()` + `.run()`. `NSApp()` é o mesmo objeto |
+| NSPanel criado nesse loop aparece? | Sim, `isVisible() == True` |
+| Rouba foco? | **Não.** `canBecomeKeyWindow() == False`, `keyWindow() is None`, app frontmost inalterado |
+| Update do ícone fora da main thread? | Funciona |
+| Política *accessory* (LSUIElement em runtime)? | Funciona (`activationPolicy() == 1`) |
+
+Detalhes que a Fase 4 herda:
+
+- Chamadas AppKit vão para a main thread com `PyObjCTools.AppHelper.callAfter`.
+- Painel: `NSPanel` com `NSWindowStyleMaskBorderless | NSWindowStyleMaskNonactivatingPanel`,
+  `setLevel_(NSStatusWindowLevel)`, `setIgnoresMouseEvents_(True)`,
+  `setHidesOnDeactivate_(False)` e collection behavior
+  `CanJoinAllSpaces | Transient | FullScreenAuxiliary`.
+- `pystray.Icon` aceita a opção `nsapplication`, então dá para injetar um
+  `NSApplication` próprio se algum dia for preciso.
+- **`icon.notify()` já funciona no Darwin** — o pystray chama
+  `osascript -e 'display notification'` internamente. O item de fallback que
+  estava na Fase 4 era desnecessário e foi removido.
+- **`HAS_MENU_RADIO = False` no backend Darwin**: os itens de modelo em
+  `tray.py` usam `radio=True` e não vão renderizar como radio no macOS.
+  Precisa de outra affordance — virou item da Fase 4.
+- `set_title()` vira `setToolTip_` no botão da barra: é tooltip, não texto
+  visível. Comportamento aceitável, nenhuma mudança necessária.
+
+Ambiente do spike: `.venv/` na raiz (ignorado pelo git) com pystray, pillow e
+pyobjc. Script em scratchpad — descartável, o resultado é o que importa.
 
 ## Fase 2 — macOS headless
 
 Sem interface: aperta o atalho, grava, transcreve, cola.
 
-- [ ] `platform/macos/hotkey.py` — `CGEventTap` + `CFRunLoop` (análogo do `WH_KEYBOARD_LL` + `GetMessage`)
-- [ ] Suporte a combo só-de-modificador (hold) via flags-changed
-- [ ] Suporte ao toggle (hold + tecla extra) e à supressão da tecla
-- [ ] `platform/macos/injector.py` — `pyperclip` + Cmd+V via `CGEventPost`, com restauração do clipboard
-- [ ] `platform/macos/sound.py` — beeps
+- [ ] `backends/macos/hotkey.py` — `CGEventTap` + `CFRunLoop` (análogo do `WH_KEYBOARD_LL` + `GetMessage`)
+- [ ] Hold via `kCGEventFlagsChanged`: `ctrl+option` (ver decisão 12). **Não suprimir** nenhuma tecla — o tap só observa
+- [x] Toggle (`ctrl+option+o`) confirmado como hands-free. Varredura do `com.apple.symbolichotkeys` em 2026-08-01: dos 43 atalhos de sistema ativos, nenhum usa `ctrl+option` nem a tecla O. Não cobre bindings internos de apps — esses só valem com o app em foco e são remapeáveis pelo usuário
+- [ ] Ignorar eventos que nós mesmos postamos: ler `kCGEventSourceUserData` e pular os marcados
+- [ ] Detectar VoiceOver ligado e avisar — ele usa Ctrl+Option como tecla modificadora e consumiria tudo
+- [ ] `backends/macos/injector.py` — `CGEventKeyboardSetUnicodeString` (decisão 11), event source privado, `CGEventSetFlags(ev, 0)`, texto em blocos de ~20 chars
+- [ ] Manter clipboard + Cmd+V como fallback em `injection.method` para apps que leem keycode cru (terminal em raw mode, desktop remoto)
+- [ ] Detectar Secure Event Input (`IsSecureEventInputEnabled()`) e avisar — campo de senha bloqueia qualquer evento sintético, unicode ou Cmd+V
+- [ ] Exibição do combo no mac (`⌃⌥` / "ctrl+option") sem mudar o que é gravado no TOML (`ctrl+alt`)
 - [ ] `core/permissions.py` — `AXIsProcessTrustedWithOptions` (acessibilidade) + microfone
 - [ ] Fluxo de primeira execução pedindo as duas permissões, com instrução clara (não falhar em silêncio)
 - [ ] Adicionar `pyobjc-framework-Quartz` e `pyobjc-framework-Cocoa` às dependências (só macOS)
+
+Beeps já saíram daqui: `core/audio_feedback.py` virou multiplataforma na Fase 0.
 
 ## Fase 3 — Backend de transcrição plugável
 
@@ -101,9 +141,9 @@ Sem isso o mac leva 20-45s por frase e parece travado.
 
 ## Fase 4 — Interface do macOS
 
-- [ ] `platform/macos/tray.py` — ícone na barra (validar lacunas do backend Darwin do pystray: `notify`, `title`, update fora da main thread)
-- [ ] Notificações via `osascript -e 'display notification'` se o pystray não cobrir
-- [ ] `platform/macos/overlay.py` — NSPanel click-through, `NSStatusWindowLevel`, sem roubar foco
+- [ ] `backends/macos/tray.py` — ícone na barra (`notify`, `title` e update fora da main thread já validados no spike)
+- [ ] Substituir o `radio=True` do menu de modelos por uma affordance que funcione no macOS (`HAS_MENU_RADIO = False` no Darwin)
+- [ ] `backends/macos/overlay.py` — NSPanel click-through, `NSStatusWindowLevel`, sem roubar foco (receita no resultado da Fase 1)
 - [ ] Janela de preferências no app: **atalhos + modelo** (o que foi pedido para o "instalador")
 - [ ] Reaproveitar a mesma janela no Windows, aposentando parte do menu do tray
 
@@ -131,7 +171,7 @@ Sem isso o mac leva 20-45s por frase e parece travado.
 
 | Risco | Impacto | Mitigação |
 |---|---|---|
-| pystray Darwin não expor o `NSApp` de forma utilizável | Fase 4 muda de forma | Spike da Fase 1; plano B sem overlay |
+| ~~pystray Darwin não expor o `NSApp` de forma utilizável~~ | — | **Resolvido pelo spike da Fase 1**: expõe, e o NSPanel convive sem roubar foco |
 | Permissão de Acessibilidade negada ou esquecida | App fica mudo, sem erro visível | Checagem no boot + aviso explícito no onboarding |
 | Bundle gigante por causa do PyTorch | DMG de vários GB | Excluir `torch` do bundle mac depois da Fase 3 |
 | Gatekeeper sem notarização | Alerta de "possível malware" ao instalar | `xattr` documentado; conta paga quando alguém reclamar |
@@ -145,3 +185,4 @@ Sem isso o mac leva 20-45s por frase e parece travado.
 |---|---|
 | 2026-08-01 | Pipeline de empacotamento macOS: spec, entitlements, `release.sh`, seção do README (Fase 5 parcial). Não executado ainda. |
 | 2026-08-01 | Fase 0: split `core/` + `backends/`, protocolos, `paths.py`, `keys.py`, `resources.py`, beeps via sounddevice, CI com import-check. Pendente: rodar no Windows. |
+| 2026-08-01 | Fase 1: spike de main thread executado no macOS. NSPanel convive com o `NSApplication` do pystray e não rouba foco. Plano B descartado, Fase 4 ajustada. |

@@ -17,8 +17,17 @@ _CTRL_ALIASES = {"ctrl", "control"}
 
 MODIFIERS = _CTRL_ALIASES | _ALT_ALIASES | _OS_MOD_ALIASES | {"shift"}
 
-DEFAULT_HOLD = f"ctrl+{OS_MOD}"
-DEFAULT_TOGGLE = f"ctrl+{OS_MOD}+o"
+# Deliberately not "ctrl+<OS_MOD>" on macOS. Push-to-talk holds the combo for
+# several seconds while the user speaks, and every destructive macOS shortcut
+# carries Cmd — ctrl+cmd+q locks the screen. Ctrl+Option has no destructive
+# system binding, so a stray keystroke mid-recording is harmless and the tap
+# never has to suppress anything.
+if sys.platform == "darwin":
+    DEFAULT_HOLD = "ctrl+alt"  # displayed as ctrl+option / ⌃⌥
+    DEFAULT_TOGGLE = "ctrl+alt+o"
+else:
+    DEFAULT_HOLD = f"ctrl+{OS_MOD}"
+    DEFAULT_TOGGLE = f"ctrl+{OS_MOD}+o"
 
 
 def _canonical(part: str) -> str:
