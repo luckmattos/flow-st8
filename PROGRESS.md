@@ -113,20 +113,50 @@ pyobjc. Script em scratchpad — descartável, o resultado é o que importa.
 
 Sem interface: aperta o atalho, grava, transcreve, cola.
 
-- [ ] `backends/macos/hotkey.py` — `CGEventTap` + `CFRunLoop` (análogo do `WH_KEYBOARD_LL` + `GetMessage`)
-- [ ] Hold via `kCGEventFlagsChanged`: `ctrl+option` (ver decisão 12). **Não suprimir** nenhuma tecla — o tap só observa
+- [x] `backends/macos/hotkey.py` — `CGEventTap` + `CFRunLoop` (análogo do `WH_KEYBOARD_LL` + `GetMessage`)
+- [x] Hold via `kCGEventFlagsChanged`: `ctrl+option` (ver decisão 12). **Não suprimir** nenhuma tecla — o tap só observa
 - [x] Toggle (`ctrl+option+o`) confirmado como hands-free. Varredura do `com.apple.symbolichotkeys` em 2026-08-01: dos 43 atalhos de sistema ativos, nenhum usa `ctrl+option` nem a tecla O. Não cobre bindings internos de apps — esses só valem com o app em foco e são remapeáveis pelo usuário
-- [ ] Ignorar eventos que nós mesmos postamos: ler `kCGEventSourceUserData` e pular os marcados
+- [x] Ignorar eventos que nós mesmos postamos: ler `kCGEventSourceUserData` e pular os marcados
+- [x] Re-armar o tap quando o sistema o desabilita (`kCGEventTapDisabledByTimeout`) — senão fica surdo pelo resto da sessão
+- [x] `backends/macos/injector.py` — `CGEventKeyboardSetUnicodeString` (decisão 11), event source privado, `CGEventSetFlags(ev, 0)`, texto em blocos de 20 chars
+- [x] Manter clipboard + Cmd+V como fallback em `injection.method` para apps que leem keycode cru (terminal em raw mode, desktop remoto)
+- [x] `core/permissions.py` — acessibilidade (`AXIsProcessTrustedWithOptions`) e Secure Event Input
+- [x] Adicionar `pyobjc-framework-Quartz`, `-Cocoa` e `-ApplicationServices` às dependências (marcadas `sys_platform == "darwin"`)
+- [ ] Permissão de microfone em `core/permissions.py` (`AVCaptureDevice`) — hoje só o `sounddevice` dispara o prompt, sem checagem prévia
 - [ ] Detectar VoiceOver ligado e avisar — ele usa Ctrl+Option como tecla modificadora e consumiria tudo
-- [ ] `backends/macos/injector.py` — `CGEventKeyboardSetUnicodeString` (decisão 11), event source privado, `CGEventSetFlags(ev, 0)`, texto em blocos de ~20 chars
-- [ ] Manter clipboard + Cmd+V como fallback em `injection.method` para apps que leem keycode cru (terminal em raw mode, desktop remoto)
-- [ ] Detectar Secure Event Input (`IsSecureEventInputEnabled()`) e avisar — campo de senha bloqueia qualquer evento sintético, unicode ou Cmd+V
 - [ ] Exibição do combo no mac (`⌃⌥` / "ctrl+option") sem mudar o que é gravado no TOML (`ctrl+alt`)
-- [ ] `core/permissions.py` — `AXIsProcessTrustedWithOptions` (acessibilidade) + microfone
-- [ ] Fluxo de primeira execução pedindo as duas permissões, com instrução clara (não falhar em silêncio)
-- [ ] Adicionar `pyobjc-framework-Quartz` e `pyobjc-framework-Cocoa` às dependências (só macOS)
+- [ ] Fluxo de primeira execução pedindo as permissões, com instrução clara (não falhar em silêncio)
 
 Beeps já saíram daqui: `core/audio_feedback.py` virou multiplataforma na Fase 0.
+
+### Verificado (2026-08-01, macOS, 13/13)
+
+Teste automatizado postando eventos sintéticos e observando o tap:
+
+| Verificação | Resultado |
+|---|---|
+| Tap instala com Acessibilidade concedida | passa |
+| `ctrl` sozinho não dispara | passa |
+| `ctrl+option` dispara `hold_down` | passa |
+| Repetição não redispara | passa |
+| Soltar option dispara `hold_up` | passa |
+| `ctrl+option+o` dispara `toggle` | passa |
+| `o` sozinho é ignorado | passa |
+| Evento marcado com `SYNTHETIC_MARK` é ignorado | passa — protege contra auto-disparo |
+| Payload unicode preservado, com acento (`"Olá, ação — çãüê"`) | passa |
+| Evento do injetor sai marcado e com flags zerados | passa |
+| Thread do tap encerra limpa | passa |
+
+**Não verificado ainda:**
+
+- Digitação real ponta a ponta (o texto iria para a janela em foco — precisa de um campo de rascunho e um humano olhando).
+- Teclado físico. Só eventos sintéticos foram testados; passam pelo mesmo caminho do tap, e a checagem é `(flags & required) == required`, tolerante a bits extras que hardware real costuma trazer — mas não é prova.
+- `capture_next_combo` (remapear atalho pelo tray).
+- Secure Event Input: implementado, nunca exercitado (precisa de campo de senha em foco).
+
+Permissão de Acessibilidade em desenvolvimento fica no **Visual Studio Code** —
+o macOS atribui ao processo responsável, e o Python roda como filho dele. No
+app empacotado será o próprio `flow-st8.app`.
 
 ## Fase 3 — Backend de transcrição plugável
 
