@@ -1,12 +1,19 @@
-"""System tray icon with state feedback."""
+"""System tray / menu bar icon.
+
+The one shell component that is genuinely shared: pystray already abstracts
+Win32 Shell_NotifyIcon and AppKit NSStatusItem, so there is nothing left for a
+per-platform implementation to do. Only three things differ, and they are
+handled inline: the autostart label, radio-button support, and the fact that
+the Darwin backend renders `title` as a tooltip.
+"""
 
 import logging
+import sys
 from typing import TYPE_CHECKING
 
 import pystray
 from PIL import Image, ImageDraw
 
-from backends.windows import autostart
 from core.config import WHISPER_MODELS, save_config
 from core.resources import resource_path
 from version import __version__
@@ -24,6 +31,21 @@ COLORS = {
 }
 
 _ARTBOARD_RGB = (244, 243, 241)
+
+_AUTOSTART_LABEL = (
+    "Start with Windows" if sys.platform == "win32" else "Iniciar com o sistema"
+)
+
+# pystray's Darwin backend sets HAS_MENU_RADIO = False: radio items render like
+# any other entry, so the active model would have no visual marker at all.
+_HAS_RADIO = getattr(pystray.Icon, "HAS_MENU_RADIO", True)
+
+
+def _autostart():
+    """Imported late: backends/__init__ imports this module."""
+    from backends import autostart
+
+    return autostart
 
 
 def _remove_artboard(image: Image.Image) -> Image.Image:
@@ -62,6 +84,11 @@ class TrayIcon:
             menu=self._build_menu(),
         )
 
+    @property
+    def icon(self) -> pystray.Icon:
+        """The underlying pystray icon — the macOS overlay rides its NSApp."""
+        return self._icon
+
     def _build_menu(self) -> pystray.Menu:
         return pystray.Menu(
             pystray.MenuItem("flow-st8", None, enabled=False),
@@ -75,10 +102,10 @@ class TrayIcon:
                 pystray.Menu(
                     *[
                         pystray.MenuItem(
-                            label,
+                            self._model_label(name, label),
                             self._make_model_callback(name),
                             checked=self._make_model_checked(name),
-                            radio=True,
+                            radio=_HAS_RADIO,
                         )
                         for name, label in WHISPER_MODELS
                     ],
@@ -96,11 +123,11 @@ class TrayIcon:
                 pystray.Menu(
                     pystray.MenuItem("Click an item below to remap", None, enabled=False),
                     pystray.MenuItem(
-                        lambda _: f"Hold (press and hold): {self._app.config.hotkey.hold_key}",
+                        lambda _: f"Hold (press and hold): {self._display(self._app.config.hotkey.hold_key)}",
                         lambda _: self._app.start_hotkey_capture("hold"),
                     ),
                     pystray.MenuItem(
-                        lambda _: f"Toggle (hold + extra key): {self._app.config.hotkey.toggle_key}",
+                        lambda _: f"Toggle (hold + extra key): {self._display(self._app.config.hotkey.toggle_key)}",
                         lambda _: self._app.start_hotkey_capture("toggle"),
                     ),
                 ),
@@ -112,12 +139,24 @@ class TrayIcon:
             ),
             pystray.Menu.SEPARATOR,
             pystray.MenuItem(
-                "Start with Windows",
+                _AUTOSTART_LABEL,
                 self._toggle_autostart,
-                checked=lambda _: autostart.is_enabled(),
+                checked=lambda _: _autostart().is_enabled(),
             ),
             pystray.MenuItem("Quit", self._quit),
         )
+
+    @staticmethod
+    def _display(combo: str) -> str:
+        from core.keys import display
+
+        return display(combo)
+
+    def _model_label(self, name: str, label: str):
+        if _HAS_RADIO:
+            return label
+        # No radio support: mark the active model in the text itself.
+        return lambda _: ("● " if self._app.config.model.name == name else "   ") + label
 
     def _make_model_callback(self, name: str):
         return lambda _: self._app.switch_model(name)
@@ -126,8 +165,11 @@ class TrayIcon:
         return lambda _: self._app.config.model.name == name
 
     def notify(self, message: str, title: str = "flow-st8") -> None:
-        """Show a system balloon notification."""
-        self._icon.notify(message, title)
+        """Show a system notification (osascript on macOS, balloon on Windows)."""
+        try:
+            self._icon.notify(message, title)
+        except Exception:
+            log.warning("Notification failed: %s", message)
 
     def set_title(self, title: str) -> None:
         self._icon.title = title
@@ -145,9 +187,14 @@ class TrayIcon:
 
     def run(self) -> None:
         """Block on the tray message loop. Must be called from main thread."""
-        self._icon.run()
+        self._icon.run(setup=self._on_ready)
+
+    def _on_ready(self, icon: pystray.Icon) -> None:
+        icon.visible = True
+        self._app.on_tray_ready()
 
     def _toggle_autostart(self) -> None:
+        autostart = _autostart()
         if autostart.is_enabled():
             if autostart.disable():
                 self._app.config.startup.autostart = False

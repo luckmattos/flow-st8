@@ -1,6 +1,7 @@
 """flow-st8 application orchestrator."""
 
 import logging
+import sys
 import threading
 from concurrent.futures import ThreadPoolExecutor
 from typing import Callable
@@ -15,7 +16,7 @@ from backends import (
     check_combo_conflict,
 )
 from core import audio_feedback as feedback
-from core import keys
+from core import keys, permissions
 from core.config import Config, save_config
 from core.recorder import AudioRecorder
 from core.transcriber import Transcriber
@@ -58,6 +59,31 @@ class FlowSt8App:
             self._executor.submit(self.vad.preload)
         self.hotkey.start()
         log.info("flow-st8 started. Press %s to record.", self.config.hotkey.key)
+
+    def on_tray_ready(self) -> None:
+        """Called once the tray's event loop is running.
+
+        On macOS this is the first moment AppKit exists, so it is where the app
+        becomes an accessory (no Dock icon) and where a missing permission is
+        reported — the tap installs silently either way, so without this the
+        app would just look broken.
+        """
+        if sys.platform == "darwin":
+            try:
+                import AppKit
+
+                AppKit.NSApp().setActivationPolicy_(
+                    AppKit.NSApplicationActivationPolicyAccessory
+                )
+            except Exception:
+                log.debug("Could not set the accessory activation policy.", exc_info=True)
+
+        missing = permissions.describe_missing()
+        if missing:
+            log.warning("%s", missing)
+            self.tray.set_state("error")
+            self.tray.notify(missing)
+            self.overlay.show_message("Permissão faltando")
 
     def _preload_with_feedback(self) -> None:
         """Load the Whisper model at startup, showing a loading badge until ready."""

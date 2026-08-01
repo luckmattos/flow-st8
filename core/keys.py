@@ -60,3 +60,22 @@ def is_modifier_only(combo: str) -> bool:
     """True when the combo has no regular key — e.g. "ctrl+win"."""
     p = parts(combo)
     return bool(p) and p <= MODIFIERS
+
+
+# How each platform writes a shortcut. Storage stays canonical either way, so
+# the TOML is portable and only the label changes.
+_SYMBOLS = {"ctrl": "⌃", "alt": "⌥", "cmd": "⌘", "shift": "⇧"}
+_WINDOWS_LABELS = {"ctrl": "Ctrl", "alt": "Alt", "win": "Win", "shift": "Shift"}
+
+
+def display(combo: str) -> str:
+    """Render a combo the way this platform's users expect to read it."""
+    rendered = []
+    for part in normalize(combo).split("+"):
+        if not part:
+            continue
+        if sys.platform == "darwin":
+            rendered.append(_SYMBOLS.get(part, part.upper()))
+        else:
+            rendered.append(_WINDOWS_LABELS.get(part, part.upper()))
+    return "".join(rendered) if sys.platform == "darwin" else "+".join(rendered)
