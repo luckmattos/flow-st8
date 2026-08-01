@@ -17,7 +17,16 @@ a = Analysis(
     pathex=[],
     binaries=[],
     datas=datas,
-    hiddenimports=['ctypes', 'sounddevice', 'pyperclip', 'silero_vad.data'],
+    hiddenimports=[
+        'ctypes', 'sounddevice', 'pyperclip', 'silero_vad.data',
+        # backends/__init__.py imports these behind `if sys.platform == "win32"`;
+        # list them so the analysis never has to guess the branch.
+        'backends.windows.autostart',
+        'backends.windows.hotkey',
+        'backends.windows.injector',
+        'backends.windows.overlay',
+        'backends.windows.tray',
+    ],
     hookspath=[],
     hooksconfig={},
     runtime_hooks=[],

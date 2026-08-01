@@ -7,7 +7,7 @@ import time
 
 import pyperclip
 
-from config import InjectionConfig
+from core.config import InjectionConfig
 
 log = logging.getLogger(__name__)
 

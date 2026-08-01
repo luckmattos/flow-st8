@@ -6,7 +6,7 @@ from collections.abc import Generator
 import numpy as np
 import sounddevice as sd
 
-from config import AudioConfig
+from core.config import AudioConfig
 
 
 class AudioRecorder:

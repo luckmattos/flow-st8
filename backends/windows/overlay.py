@@ -5,14 +5,14 @@ from __future__ import annotations
 import ctypes
 import math
 import queue
-import sys
 import threading
 import tkinter as tk
 import tkinter.font as tkfont
-from pathlib import Path
 
 import numpy as np
 from PIL import Image, ImageTk
+
+from core.resources import resource_path
 
 _BADGE = 68
 _MESSAGE_H = 30
@@ -37,11 +37,6 @@ _WS_EX_LAYERED = 0x00080000
 _LWA_COLORKEY = 0x00000001
 _LWA_ALPHA = 0x00000002
 _ALPHA_BYTE = int(0.94 * 255)
-
-
-def _resource_path(relative: str) -> Path:
-    base = Path(getattr(sys, "_MEIPASS", Path(__file__).resolve().parent))
-    return base / relative
 
 
 def _remove_artboard(image: Image.Image) -> Image.Image:
@@ -142,7 +137,7 @@ class WaveOverlay:
 
     def _load_icon(self, root: tk.Tk) -> ImageTk.PhotoImage | None:
         try:
-            image = _remove_artboard(Image.open(_resource_path("assets/icon-no-wave.png")))
+            image = _remove_artboard(Image.open(resource_path("assets/icon-no-wave.png")))
             image = image.resize((_BADGE, _BADGE), Image.Resampling.LANCZOS)
             return ImageTk.PhotoImage(image, master=root)
         except Exception:

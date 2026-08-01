@@ -1,7 +1,7 @@
 # flow-st8
 
 ## O que e
-Transcritor de voz local e leve para Windows. Hotkey global -> grava voz -> transcreve localmente com Whisper -> cola no campo de texto ativo. Sem cloud, sem UI alem de tray icon.
+Transcritor de voz local e leve. Windows funcional; port macOS em andamento (ver PROGRESS.md). Hotkey global -> grava voz -> transcreve localmente com Whisper -> cola no campo de texto ativo. Sem cloud, sem UI alem de tray icon.
 
 ## Stack
 - Python 3.x
@@ -10,23 +10,36 @@ Transcritor de voz local e leve para Windows. Hotkey global -> grava voz -> tran
 - Win32 RegisterHotKey via ctypes (hotkey global)
 - pyperclip + SendInput (injecao de texto)
 - pystray + Pillow (tray icon)
-- sounddevice (captura mic)
-- winsound stdlib (feedback sonoro)
+- sounddevice (captura mic + beeps de feedback)
 - tomllib stdlib (config)
 
 ## Arquitetura
+Nucleo portavel (`core/`) + shell de SO (`backends/`). O shell nao compartilha
+codigo entre plataformas: cada backend e escrito do zero contra os protocolos.
+
 ```
-main.py           -> entry point, bootstrap
-app.py            -> orquestrador, conecta modulos
-config.py         -> config TOML (%APPDATA%/flow-st8/config.toml)
-recorder.py       -> captura microfone (sounddevice, 16kHz mono float32)
-vad.py            -> Silero VAD wrapper (auto-stop apos 1.2s silencio)
-transcriber.py    -> Whisper wrapper (lazy load, thread-safe)
-injector.py       -> clipboard + Ctrl+V, restaura clipboard anterior
-hotkey.py         -> Win32 RegisterHotKey (thread dedicada)
-tray.py           -> pystray icon com estados (idle/recording/processing)
-audio_feedback.py -> beeps via winsound
+main.py                    -> entry point, bootstrap
+
+core/                      -> portavel, sem codigo de SO
+  app.py                   -> orquestrador, conecta modulos
+  config.py                -> config TOML
+  paths.py                 -> %APPDATA% (Win) vs ~/Library/Application Support (mac)
+  keys.py                  -> vocabulario de atalhos; OS_MOD = win|cmd
+  resources.py             -> assets, funciona tambem no bundle PyInstaller
+  recorder.py              -> captura microfone (sounddevice, 16kHz mono float32)
+  vad.py                   -> Silero VAD wrapper (auto-stop apos 1.2s silencio)
+  transcriber.py           -> Whisper wrapper (lazy load, thread-safe)
+  audio_feedback.py        -> beeps gerados via sounddevice
+
+backends/
+  base.py                  -> protocolos (Hotkey/Injector/Overlay/Tray/Autostart)
+  __init__.py              -> escolhe o shell por sys.platform; stubs fora do Windows
+  windows/                 -> Win32 via ctypes
+    hotkey.py injector.py overlay.py tray.py autostart.py
 ```
+
+`import backends` nunca falha: plataforma sem shell recebe stubs que so
+levantam erro no uso. E isso que mantem `core/` importavel no CI e no mac.
 
 ## Threading
 - Main Thread: pystray.Icon.run() (bloqueia)
