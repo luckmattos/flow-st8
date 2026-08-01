@@ -33,6 +33,57 @@ python install.py
 
 ---
 
+## macOS (work in progress)
+
+The macOS build is not usable yet — the platform layer (global hotkey, text
+injection, overlay, tray) is still Windows-only. The packaging pipeline below is
+already in place so the app can ship as soon as that lands.
+
+### Building the DMG
+
+```bash
+./packaging/macos/release.sh
+```
+
+Produces `dist/flow-st8-<version>-arm64.dmg` (Apple Silicon only).
+
+The script signs with a **self-signed certificate** by default, which costs
+nothing and keeps the app's Accessibility permission from being revoked on every
+rebuild. Create one once:
+
+> Keychain Access → Certificate Assistant → Create a Certificate
+> Name: `flow-st8-dev` · Type: Self Signed Root · Certificate Type: Code Signing
+
+Override with `SIGN_IDENTITY=<name>` if you use a different one.
+
+### Installing an unsigned build
+
+Builds that are not notarized are blocked by Gatekeeper on first launch. After
+dragging the app to Applications, either use System Settings → Privacy &
+Security → **Open Anyway**, or clear the quarantine flag directly:
+
+```bash
+xattr -dr com.apple.quarantine /Applications/flow-st8.app
+```
+
+### Notarized builds
+
+Notarization requires a paid Apple Developer account. With one, store the
+credentials once and the same script handles hardened runtime, entitlements,
+notarization and stapling:
+
+```bash
+xcrun notarytool store-credentials flow-st8-notary \
+  --key AuthKey_XXXX.p8 --key-id XXXX --issuer <issuer-id>
+
+SIGN_IDENTITY="Developer ID Application: Name (TEAMID)" \
+NOTARY_PROFILE=flow-st8-notary ./packaging/macos/release.sh
+```
+
+Nothing else changes — same spec, same bundle, same DMG layout.
+
+---
+
 ## Run
 
 Installed users can launch flow-st8 from the desktop shortcut or startup entry.
