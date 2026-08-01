@@ -147,9 +147,14 @@ Teste automatizado postando eventos sintéticos e observando o tap:
 | Evento do injetor sai marcado e com flags zerados | passa |
 | Thread do tap encerra limpa | passa |
 
+**Digitação ponta a ponta: passa nos dois métodos.** Documento novo do TextEdit,
+injeção pelo `TextInjector` real, texto lido de volta via AppleScript e
+comparado. `"Olá! Este é um teste de injeção do flow-st8 — com acentuação,
+çedilha e 123."` chega idêntico tanto por `unicode` quanto por `clipboard`.
+Isso verifica **entrega**, não só o envio.
+
 **Não verificado ainda:**
 
-- Digitação real ponta a ponta (o texto iria para a janela em foco — precisa de um campo de rascunho e um humano olhando).
 - Teclado físico. Só eventos sintéticos foram testados; passam pelo mesmo caminho do tap, e a checagem é `(flags & required) == required`, tolerante a bits extras que hardware real costuma trazer — mas não é prova.
 - `capture_next_combo` (remapear atalho pelo tray).
 - Secure Event Input: implementado, nunca exercitado (precisa de campo de senha em foco).
