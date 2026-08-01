@@ -8,7 +8,7 @@ import numpy as np
 import torch
 import whisper
 
-from config import ModelConfig
+from core.config import ModelConfig
 
 log = logging.getLogger(__name__)
 

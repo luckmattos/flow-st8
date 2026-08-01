@@ -1,11 +1,12 @@
-"""flow-st8 - Lightweight local voice transcription for Windows."""
+"""flow-st8 - Lightweight local voice transcription."""
 
 import logging
 import sys
 from logging.handlers import RotatingFileHandler
 
-from config import APP_DIR, load_config
-from app import FlowSt8App
+from core.app import FlowSt8App
+from core.config import load_config
+from core.paths import APP_DIR, LOG_PATH
 from version import __version__
 
 
@@ -24,7 +25,7 @@ def _setup_logging() -> None:
     handlers = [
         logging.StreamHandler(sys.stderr),
         RotatingFileHandler(
-            APP_DIR / "flow-st8.log",
+            LOG_PATH,
             maxBytes=512_000,
             backupCount=2,
             encoding="utf-8",
@@ -47,7 +48,7 @@ def main() -> None:
     log.info("Loading configuration...")
     config = load_config()
 
-    import autostart
+    from backends import autostart
     autostart.sync(config.startup.autostart)
 
     log.info(

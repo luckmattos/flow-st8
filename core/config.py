@@ -1,12 +1,10 @@
 """Configuration management for flow-st8."""
 
-import os
 import tomllib
 from dataclasses import dataclass, field
-from pathlib import Path
 
-APP_DIR = Path(os.environ.get("APPDATA", "")) / "flow-st8"
-CONFIG_PATH = APP_DIR / "config.toml"
+from core import keys
+from core.paths import APP_DIR, CONFIG_PATH, legacy_app_dir
 
 WHISPER_MODELS: list[tuple[str, str]] = [
     ("tiny",           "tiny           — rápido, qualidade baixa"),
@@ -16,9 +14,7 @@ WHISPER_MODELS: list[tuple[str, str]] = [
     ("large-v3-turbo", "large-v3-turbo — melhor qualidade ★ GPU"),
 ]
 
-_HOTKEY_MODIFIERS = {"ctrl", "control", "win", "super", "shift", "alt"}
-
-DEFAULT_CONFIG_TOML = """\
+DEFAULT_CONFIG_TOML = f"""\
 [model]
 # Opcoes: "tiny", "base", "small", "medium", "large-v3-turbo"
 # large-v3-turbo: melhor qualidade, ~0.5s em GPU CUDA, ~10-20s em CPU
@@ -33,9 +29,9 @@ initial_prompt = ""
 # Modos: "toggle" (press start/stop) ou "push_to_talk" (segura para gravar)
 mode = "toggle"
 # hold_key: segurar para gravar (push-to-talk)
-hold_key = "ctrl+win"
+hold_key = "{keys.DEFAULT_HOLD}"
 # toggle_key: pressionar para iniciar/parar
-toggle_key = "ctrl+win+o"
+toggle_key = "{keys.DEFAULT_TOGGLE}"
 
 [audio]
 # -1 = microfone padrao do sistema
@@ -81,8 +77,8 @@ class ModelConfig:
 @dataclass
 class HotkeyConfig:
     mode: str = "toggle"
-    hold_key: str = "ctrl+win"
-    toggle_key: str = "ctrl+win+o"
+    hold_key: str = keys.DEFAULT_HOLD
+    toggle_key: str = keys.DEFAULT_TOGGLE
     stop_key: str = "space"
 
     @property
@@ -152,15 +148,6 @@ def _dict_to_config(data: dict) -> Config:
     )
 
 
-def _hotkey_parts(hotkey: str) -> set[str]:
-    return {part.strip().lower() for part in hotkey.split("+") if part.strip()}
-
-
-def _is_modifier_only_hotkey(hotkey: str) -> bool:
-    parts = _hotkey_parts(hotkey)
-    return bool(parts) and parts <= _HOTKEY_MODIFIERS
-
-
 def _serialize_config(config: Config) -> str:
     return f"""[model]
 name = "{config.model.name}"
@@ -218,9 +205,9 @@ def save_config(config: Config) -> None:
 
 
 def _migrate_legacy_dir() -> None:
-    """Move old %APPDATA%/whisprflow -> %APPDATA%/flow-st8 (one-shot)."""
-    legacy_dir = Path(os.environ.get("APPDATA", "")) / "whisprflow"
-    if legacy_dir.exists() and not APP_DIR.exists():
+    """Move old %APPDATA%/whisprflow -> %APPDATA%/flow-st8 (one-shot, Windows)."""
+    legacy_dir = legacy_app_dir()
+    if legacy_dir and legacy_dir.exists() and not APP_DIR.exists():
         legacy_dir.rename(APP_DIR)
 
 
@@ -242,17 +229,26 @@ def load_config() -> Config:
     if "key" in hotkey_data and "hold_key" not in hotkey_data:
         old_key = hotkey_data.pop("key")
         legacy_keys = {"ctrl+shift+space", "ctrl+win+space"}
-        hotkey_data["hold_key"] = "ctrl+win" if old_key in legacy_keys else old_key
+        hotkey_data["hold_key"] = keys.DEFAULT_HOLD if old_key in legacy_keys else old_key
         dirty = True
     if "toggle_key" not in hotkey_data:
-        hotkey_data["toggle_key"] = "ctrl+win+o"
+        hotkey_data["toggle_key"] = keys.DEFAULT_TOGGLE
         dirty = True
-    if not _is_modifier_only_hotkey(str(hotkey_data.get("hold_key", ""))):
+    if not keys.is_modifier_only(str(hotkey_data.get("hold_key", ""))):
         old_hold_key = str(hotkey_data.get("hold_key", "")).strip().lower()
-        hotkey_data["hold_key"] = "ctrl+win"
+        hotkey_data["hold_key"] = keys.DEFAULT_HOLD
         if old_hold_key and "+" not in old_hold_key:
-            hotkey_data["toggle_key"] = f"ctrl+win+{old_hold_key}"
+            hotkey_data["toggle_key"] = f"{keys.DEFAULT_HOLD}+{old_hold_key}"
         dirty = True
+
+    # Rewrite OS-modifier aliases so backends only ever see this platform's name.
+    for field_name in ("hold_key", "toggle_key"):
+        raw = str(hotkey_data.get(field_name, ""))
+        if raw:
+            canonical = keys.normalize(raw)
+            if canonical != raw:
+                hotkey_data[field_name] = canonical
+                dirty = True
 
     if data.get("model", {}).get("name") == "base":
         data.setdefault("model", {})["name"] = "large-v3-turbo"

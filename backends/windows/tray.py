@@ -1,19 +1,18 @@
 """System tray icon with state feedback."""
 
 import logging
-import sys
-from pathlib import Path
 from typing import TYPE_CHECKING
 
 import pystray
 from PIL import Image, ImageDraw
 
-import autostart
-from config import WHISPER_MODELS, save_config
+from backends.windows import autostart
+from core.config import WHISPER_MODELS, save_config
+from core.resources import resource_path
 from version import __version__
 
 if TYPE_CHECKING:
-    from app import FlowSt8App
+    from core.app import FlowSt8App
 
 log = logging.getLogger(__name__)
 
@@ -25,11 +24,6 @@ COLORS = {
 }
 
 _ARTBOARD_RGB = (244, 243, 241)
-
-
-def _resource_path(relative: str) -> Path:
-    base = Path(getattr(sys, "_MEIPASS", Path(__file__).resolve().parent))
-    return base / relative
 
 
 def _remove_artboard(image: Image.Image) -> Image.Image:
@@ -49,7 +43,7 @@ def _make_icon(state: str) -> Image.Image:
     """Create the tray icon from the app logo plus a small state badge."""
     color = COLORS.get(state, COLORS["idle"])
     try:
-        img = _remove_artboard(Image.open(_resource_path("assets/icon.png")))
+        img = _remove_artboard(Image.open(resource_path("assets/icon.png")))
         img = img.resize((64, 64), Image.Resampling.LANCZOS)
     except Exception:
         img = Image.new("RGBA", (64, 64), (0, 0, 0, 0))
