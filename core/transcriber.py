@@ -1,127 +1,103 @@
-"""Whisper transcription wrapper with lazy loading."""
+"""Transcription facade.
+
+Everything that is not engine-specific lives here — the energy gate, silence
+trimming, restricted language detection and the anti-hallucination cleanup —
+so both backends behave identically. Swapping engines must change how fast the
+text arrives, never what it says.
+"""
 
 import logging
 import re
 import threading
 
 import numpy as np
-import torch
-import whisper
 
 from core.config import ModelConfig
+from core.stt import create_backend, describe_device
 
 log = logging.getLogger(__name__)
+
+#: Below this RMS the recording is treated as silence, not speech.
+_SILENCE_RMS = 0.005
+_NO_SPEECH_MAX = 0.6
 
 
 class Transcriber:
     def __init__(self, config: ModelConfig):
         self._config = config
-        self._model: whisper.Whisper | None = None
+        self._backend = None
         self._lock = threading.Lock()
-        self._device = "cuda" if torch.cuda.is_available() else "cpu"
-        self._use_fp16 = self._device == "cuda"
         # When language == "auto", detection is restricted to these only.
         self._allowed_langs = ("pt", "en")
 
+    @property
+    def device(self) -> str:
+        """Engine actually in use: "cuda", "mlx" or "cpu"."""
+        return describe_device()
+
     def preload(self) -> None:
         """Load model in advance (call from background thread at startup)."""
-        log.info(
-            "Loading Whisper model '%s' on %s...",
-            self._config.name,
-            self._device.upper(),
-        )
         with self._lock:
-            if self._model is None:
-                self._model = whisper.load_model(
-                    self._config.name, device=self._device
-                )
-        log.info("Whisper model loaded.")
+            if self._backend is not None:
+                return
+            backend = create_backend(self._config.name)
+        backend.load()
+        with self._lock:
+            self._backend = backend
 
     def reload(self, new_config: "ModelConfig") -> None:
         """Swap model in-place (call from background thread)."""
         log.info("Reloading Whisper model '%s'...", new_config.name)
         with self._lock:
-            self._model = None
+            self._backend = None
             self._config = new_config
         self.preload()
 
     def _ensure_loaded(self) -> None:
-        if self._model is None:
+        if self._backend is None:
             self.preload()
-
-    def _detect_restricted_lang(self, audio: np.ndarray) -> str:
-        """Detect language but restrict the choice to self._allowed_langs.
-
-        Whisper has no native way to limit auto-detect to a subset, so we read
-        the full language-probability distribution and pick the most likely
-        among the allowed set. Anything else (e.g. Arabic) can never be chosen.
-        """
-        try:
-            mel = whisper.log_mel_spectrogram(
-                whisper.pad_or_trim(audio),
-                n_mels=self._model.dims.n_mels,
-            ).to(self._model.device)
-            if self._use_fp16:
-                mel = mel.half()
-            _, probs = self._model.detect_language(mel)
-            best = max(self._allowed_langs, key=lambda l: probs.get(l, 0.0))
-            log.info(
-                "Restricted lang detect: pt=%.2f en=%.2f -> %s",
-                probs.get("pt", 0.0),
-                probs.get("en", 0.0),
-                best,
-            )
-            return best
-        except Exception:
-            log.exception("Language detection failed, defaulting to pt.")
-            return self._allowed_langs[0]
 
     def transcribe(self, audio: np.ndarray, context_hint: str | None = None) -> str:
         """Transcribe float32 16kHz mono audio. Returns cleaned text.
 
         context_hint: tail of previous segment text — used as initial_prompt for
-        coherence in streaming mode (ignored when language == 'auto').
+        coherence in streaming mode.
         """
         self._ensure_loaded()
 
         # Energy check - reject if audio is essentially silent.
         rms = float(np.sqrt(np.mean(audio ** 2)))
-        if rms < 0.005:
+        if rms < _SILENCE_RMS:
             log.info("Audio RMS too low (%.5f), skipping transcription.", rms)
             return ""
 
         audio = _trim_trailing_silence(audio)
 
-        if self._config.language == "auto":
-            # Restricted auto-detect: only pt or en, never other languages.
-            lang = self._detect_restricted_lang(audio)
-        else:
-            lang = self._config.language
+        with self._lock:
+            backend = self._backend
+            config = self._config
 
-        prompt = context_hint or self._config.initial_prompt or None
+        if config.language == "auto":
+            # Restricted auto-detect: only pt or en, never other languages.
+            try:
+                lang = backend.detect_language(audio, self._allowed_langs)
+            except Exception:
+                log.exception(
+                    "Language detection failed, defaulting to %s.",
+                    self._allowed_langs[0],
+                )
+                lang = self._allowed_langs[0]
+        else:
+            lang = config.language
+
+        prompt = context_hint or config.initial_prompt or None
 
         with self._lock:
-            result = whisper.transcribe(
-                self._model,
-                audio,
-                language=lang,
-                fp16=self._use_fp16,
-                task="transcribe",
-                initial_prompt=prompt,
-                # condition_on_previous_text=False prevents the decoder feedback
-                # loop that causes repetitive hallucinations on trailing silence.
-                condition_on_previous_text=False,
-                no_speech_threshold=0.6,
-                logprob_threshold=-1.0,
-                compression_ratio_threshold=2.4,
-                temperature=(0.0,),
-            )
+            segments = backend.transcribe(audio, lang, prompt)
 
-        segments = result.get("segments", [])
         good_segments = [
-            s for s in segments if s.get("no_speech_prob", 0.0) < 0.6
+            s for s in segments if s.get("no_speech_prob", 0.0) < _NO_SPEECH_MAX
         ]
-
         if not good_segments:
             return ""
 

@@ -167,12 +167,39 @@ app empacotado será o próprio `flow-st8.app`.
 
 Sem isso o mac leva 20-45s por frase e parece travado.
 
-- [ ] Protocolo `TranscriptionBackend` em `core/`
-- [ ] Implementação `openai-whisper` (Windows/CUDA) — comportamento idêntico ao de hoje
-- [ ] Implementação `mlx-whisper` (Apple Silicon, GPU via Metal)
-- [ ] Detecção de device: `cuda` → `mlx` → `cpu`, rebaixando o modelo default quando o hardware não aguenta
-- [ ] Preservar no caminho mac: anti-alucinação, detect restrito pt/en, trim de silêncio, `initial_prompt`
-- [ ] Download do modelo na primeira execução (não no empacotamento)
+- [x] Protocolo `SttBackend` em `core/stt/base.py`
+- [x] Implementação `openai-whisper` (Windows/CUDA) — parâmetros de decodificação copiados sem alteração
+- [x] Implementação `mlx-whisper` (Apple Silicon, GPU via Metal)
+- [x] Detecção de device: `cuda` → `mlx` → `cpu`. O modelo pesado em CPU gera **aviso** e `recommended_model()`, nunca troca sozinho a escolha do usuário
+- [x] Preservar no caminho mac: anti-alucinação, detect restrito pt/en, trim de silêncio, `initial_prompt` — tudo vive no facade `core/transcriber.py`, compartilhado pelos dois motores
+- [x] Download do modelo na primeira execução (cache do Hugging Face, não no empacotamento)
+
+### Medido no macOS (M-series, `large-v3-turbo` via MLX)
+
+| | |
+|---|---|
+| Carregar modelo (cache quente) | 1,7s |
+| Frase de 6,1s | 2,1s |
+| Frase de 3,6s | 1,9s |
+| Frase curta, idioma forçado | 1,0s |
+
+Referência do CPU no README: 20-45s para o mesmo modelo. É a diferença entre
+usável e parecer travado.
+
+**Dois bugs achados e corrigidos durante o teste:**
+
+1. `pad_or_trim` do MLX só aceita `mx.array`. Passar numpy estourava dentro do
+   `mx.pad`, e o `except` do facade engolia — resultado: **toda** gravação era
+   fixada no primeiro idioma da lista. Só apareceu porque o teste comparava o
+   idioma detectado com o esperado.
+2. `mlx_whisper.transcribe` busca o modelo num `ModelHolder` em `float16`,
+   enquanto o `load()` criava uma instância separada em `float32`. Duas cópias
+   residentes (~3GB no turbo) e a detecção rodando num modelo diferente do que
+   transcrevia. Passando pelo holder: carga caiu de 42s para 1,7s.
+
+**Não verificado:** qualidade com fala humana real. O teste usa vozes sintéticas
+do `say`, que o Whisper transcreve mal por natureza — o texto em português sai
+aproximado. Isso mede encanamento e velocidade, não acurácia.
 
 ## Fase 4 — Interface do macOS
 
