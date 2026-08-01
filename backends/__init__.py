@@ -62,7 +62,6 @@ if _PLATFORM == "win32":
         from backends.windows.hotkey import HotkeyManager, check_combo_conflict
         from backends.windows.injector import TextInjector
         from backends.windows.overlay import WaveOverlay
-        from backends.windows.tray import TrayIcon
     except ImportError as exc:  # missing pystray/pillow/pyperclip
         _IMPORT_ERROR = exc
 
@@ -71,7 +70,14 @@ elif _PLATFORM == "darwin":
     try:
         from backends.macos.hotkey import HotkeyManager, check_combo_conflict
         from backends.macos.injector import TextInjector
+        from backends.macos.overlay import WaveOverlay
     except ImportError as exc:  # pyobjc not installed
+        _IMPORT_ERROR = exc
+
+if _PLATFORM in ("win32", "darwin"):
+    try:
+        from backends.tray import TrayIcon
+    except ImportError as exc:  # missing pystray/pillow
         _IMPORT_ERROR = exc
 
 _IMPORT_ERROR = globals().get("_IMPORT_ERROR")
