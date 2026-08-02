@@ -30,7 +30,7 @@ COLORS = {
     "error": (220, 120, 50),
 }
 
-_ARTBOARD_RGB = (244, 243, 241)
+_LOGO = "assets/flow-st8-icon.png"
 
 _AUTOSTART_LABEL = (
     "Start with Windows" if sys.platform == "win32" else "Iniciar com o sistema"
@@ -48,24 +48,11 @@ def _autostart():
     return autostart
 
 
-def _remove_artboard(image: Image.Image) -> Image.Image:
-    """Turn the exported off-white artboard into transparency."""
-    image = image.convert("RGBA")
-    pixels = image.load()
-    w, h = image.size
-    for y in range(h):
-        for x in range(w):
-            r, g, b, a = pixels[x, y]
-            if a and abs(r - _ARTBOARD_RGB[0]) <= 3 and abs(g - _ARTBOARD_RGB[1]) <= 3 and abs(b - _ARTBOARD_RGB[2]) <= 3:
-                pixels[x, y] = (r, g, b, 0)
-    return image
-
-
 def _make_icon(state: str) -> Image.Image:
     """Create the tray icon from the app logo plus a small state badge."""
     color = COLORS.get(state, COLORS["idle"])
     try:
-        img = _remove_artboard(Image.open(resource_path("assets/icon.png")))
+        img = Image.open(resource_path(_LOGO)).convert("RGBA")
         img = img.resize((64, 64), Image.Resampling.LANCZOS)
     except Exception:
         img = Image.new("RGBA", (64, 64), (0, 0, 0, 0))

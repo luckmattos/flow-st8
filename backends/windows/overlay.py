@@ -27,9 +27,21 @@ _KEY_COLORREF = 0x00020000  # COLORREF (0x00BBGGRR): B=2, G=0, R=0
 
 _TEXT_COLOR = "#e0e0ff"
 _HINT_COLOR = "#7a8aaa"
-_BAR_ACTIVE = "#c7f902"
-_BAR_DIM = "#6f8a18"
-_ARTBOARD_RGB = (244, 243, 241)
+
+# Exact fills from assets/flow-st8-icon.svg, so the badge we draw matches the
+# logo pixel-for-pixel instead of approximating the brand green.
+_BRAND_GREEN = "#B7F700"
+_BRAND_DARK = "#2D3325"
+
+_LOGO = "assets/flow-st8-icon.png"
+
+# Pulsing recording dot, mirroring assets/flow-st8-icon-recording.svg (a fixed
+# r=13 circle in a 100px canvas) but animated: radius tracks live audio level
+# instead of staying static.
+_DOT_MIN_R = 7.0
+_DOT_MAX_R = 15.0
+
+_SPIN_SECONDS = 2.0  # one full loading-spinner turn
 
 _GWL_EXSTYLE = -20
 _WS_EX_TRANSPARENT = 0x00000020
@@ -37,19 +49,6 @@ _WS_EX_LAYERED = 0x00080000
 _LWA_COLORKEY = 0x00000001
 _LWA_ALPHA = 0x00000002
 _ALPHA_BYTE = int(0.94 * 255)
-
-
-def _remove_artboard(image: Image.Image) -> Image.Image:
-    """Turn the exported off-white artboard into transparency."""
-    image = image.convert("RGBA")
-    pixels = image.load()
-    w, h = image.size
-    for y in range(h):
-        for x in range(w):
-            r, g, b, a = pixels[x, y]
-            if a and abs(r - _ARTBOARD_RGB[0]) <= 3 and abs(g - _ARTBOARD_RGB[1]) <= 3 and abs(b - _ARTBOARD_RGB[2]) <= 3:
-                pixels[x, y] = (r, g, b, 0)
-    return image
 
 
 class WaveOverlay:
@@ -117,7 +116,8 @@ class WaveOverlay:
 
         self._root = root
         self._canvas = canvas
-        self._icon = self._load_icon(root)
+        self._icon = self._load_icon()
+        self._spin_photo: ImageTk.PhotoImage | None = None  # kept alive against Tk's GC
         self._visible = False
         self._mode = "wave"  # "wave" | "message" | "loading"
         self._message = ""
@@ -125,6 +125,7 @@ class WaveOverlay:
         self._smoothed_amp = 0.0
         self._is_speech = False
         self._phase = 0.0
+        self._spin_deg = 0.0
         self._hint_text = ""
         self._current_w = _BADGE
         self._current_h = _BADGE
@@ -135,11 +136,12 @@ class WaveOverlay:
         root.after(_FPS_MS, self._poll)
         root.mainloop()
 
-    def _load_icon(self, root: tk.Tk) -> ImageTk.PhotoImage | None:
+    def _load_icon(self) -> Image.Image | None:
+        """Full logo, kept as a PIL Image (not PhotoImage) — the loading
+        spinner rotates it fresh from this source every frame."""
         try:
-            image = _remove_artboard(Image.open(resource_path("assets/icon-no-wave.png")))
-            image = image.resize((_BADGE, _BADGE), Image.Resampling.LANCZOS)
-            return ImageTk.PhotoImage(image, master=root)
+            image = Image.open(resource_path(_LOGO)).convert("RGBA")
+            return image.resize((_BADGE, _BADGE), Image.Resampling.LANCZOS)
         except Exception:
             return None
 
@@ -246,6 +248,7 @@ class WaveOverlay:
 
     def _draw(self) -> None:
         self._phase += 0.15
+        self._spin_deg = (self._spin_deg + 360.0 / (_SPIN_SECONDS * 1000.0 / _FPS_MS)) % 360.0
         self._smoothed_amp = self._smoothed_amp * 0.72 + self._amp * 0.28
 
         c = self._canvas
@@ -255,11 +258,9 @@ class WaveOverlay:
         if self._mode == "message":
             self._draw_message(self._message, w)
         elif self._mode == "loading":
-            self._draw_badge()
-            self._draw_processing_bars()
+            self._draw_loading_spin()
         else:
-            self._draw_badge()
-            self._draw_audio_bars()
+            self._draw_recording_circle()
 
         if self._hint_text:
             c.create_text(
@@ -271,54 +272,33 @@ class WaveOverlay:
                 anchor="center",
             )
 
-    def _draw_badge(self) -> None:
-        if self._icon is not None:
-            self._canvas.create_image(0, 0, image=self._icon, anchor="nw")
-        else:
-            self._canvas.create_oval(2, 2, _BADGE - 2, _BADGE - 2, fill="#2d3126", outline="")
+    def _draw_loading_spin(self) -> None:
+        """Rotate the logo clockwise. Since its green circle fills the canvas
+        edge-to-edge and is perfectly round, rotating the whole raster reads as
+        just the inner "s8" mark spinning — no need to separate it out."""
+        if self._icon is None:
+            self._canvas.create_oval(2, 2, _BADGE - 2, _BADGE - 2, fill=_BRAND_GREEN, outline="")
+            return
+        # Negative angle: Pillow rotates counter-clockwise for positive degrees.
+        rotated = self._icon.rotate(-self._spin_deg, resample=Image.Resampling.BICUBIC)
+        self._spin_photo = ImageTk.PhotoImage(rotated, master=self._root)
+        self._canvas.create_image(0, 0, image=self._spin_photo, anchor="nw")
 
-    def _draw_audio_bars(self) -> None:
-        # Coordinates mirror the three horizontal bars from icon.svg, scaled to badge size.
+    def _draw_recording_circle(self) -> None:
+        """Green badge with a dark dot pulsing to the live audio level —
+        matches assets/flow-st8-icon-recording.svg, animated instead of static."""
         level = min(1.0, self._smoothed_amp * 18.0)
         if not self._is_speech:
             level = max(0.10, 0.18 + math.sin(self._phase * 2.2) * 0.05)
 
-        centers_y = [54.6, 58.7, 62.8]
-        max_widths = [7.0, 11.0, 15.0]
-        min_widths = [3.5, 5.0, 7.0]
-        x_center = _BADGE / 2 + 0.5
+        self._canvas.create_oval(0, 0, _BADGE, _BADGE, fill=_BRAND_GREEN, outline="")
 
-        for i, y in enumerate(centers_y):
-            wobble = 0.82 + 0.18 * math.sin(self._phase * 2.4 + i * 1.7)
-            width = min_widths[i] + (max_widths[i] - min_widths[i]) * level * wobble
-            thickness = 2.1 + 0.8 * level
-            color = _BAR_ACTIVE if self._is_speech else _BAR_DIM
-            self._canvas.create_line(
-                x_center - width,
-                y,
-                x_center + width,
-                y,
-                fill=color,
-                width=thickness,
-                capstyle="round",
-            )
-
-    def _draw_processing_bars(self) -> None:
-        centers_y = [54.6, 58.7, 62.8]
-        widths = [5.0, 8.5, 12.0]
-        x_center = _BADGE / 2 + 0.5
-        for i, y in enumerate(centers_y):
-            pulse = 0.45 + 0.55 * abs(math.sin(self._phase * 2.0 + i * 1.1))
-            width = widths[i] * pulse
-            self._canvas.create_line(
-                x_center - width,
-                y,
-                x_center + width,
-                y,
-                fill=_BAR_ACTIVE,
-                width=2.4,
-                capstyle="round",
-            )
+        radius = _DOT_MIN_R + (_DOT_MAX_R - _DOT_MIN_R) * level
+        cx = cy = _BADGE / 2
+        self._canvas.create_oval(
+            cx - radius, cy - radius, cx + radius, cy + radius,
+            fill=_BRAND_DARK, outline="",
+        )
 
     def _draw_message(self, text: str, w: int) -> None:
         self._canvas.create_rectangle(

@@ -26,8 +26,7 @@ icon = str(ICNS) if ICNS.exists() else None
 
 datas = [
     (str(ROOT / "VERSION"), "."),
-    (str(ROOT / "assets" / "icon.png"), "assets"),
-    (str(ROOT / "assets" / "icon-no-wave.png"), "assets"),
+    (str(ROOT / "assets" / "flow-st8-icon.png"), "assets"),
 ]
 datas += collect_data_files("silero_vad", includes=["data/*"])
 # MLX ships its Metal kernels as mlx/lib/mlx.metallib. PyInstaller treats it as

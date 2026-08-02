@@ -37,22 +37,22 @@ _MARGIN_Y = 76
 
 _TEXT_COLOR = (224, 224, 255, 255)
 _HINT_COLOR = (122, 138, 170, 255)
-_BAR_ACTIVE = (199, 249, 2, 255)
-_BAR_DIM = (111, 138, 24, 255)
 _MESSAGE_BG = (26, 26, 46, 235)
-_ARTBOARD_RGB = (244, 243, 241)
 
+# Exact fills from assets/flow-st8-icon.svg, so the badge we draw matches the
+# logo pixel-for-pixel instead of approximating the brand green.
+_BRAND_GREEN = (183, 247, 0, 255)
+_BRAND_DARK = (45, 51, 37, 255)
 
-def _remove_artboard(image: Image.Image) -> Image.Image:
-    image = image.convert("RGBA")
-    pixels = image.load()
-    w, h = image.size
-    for y in range(h):
-        for x in range(w):
-            r, g, b, a = pixels[x, y]
-            if a and abs(r - _ARTBOARD_RGB[0]) <= 3 and abs(g - _ARTBOARD_RGB[1]) <= 3 and abs(b - _ARTBOARD_RGB[2]) <= 3:
-                pixels[x, y] = (r, g, b, 0)
-    return image
+_LOGO = "assets/flow-st8-icon.png"
+
+# Pulsing recording dot, mirroring assets/flow-st8-icon-recording.svg (a fixed
+# r=13 circle in a 100px canvas) but animated: radius tracks live audio level
+# instead of staying static.
+_DOT_MIN_R = 7.0
+_DOT_MAX_R = 15.0
+
+_SPIN_SECONDS = 2.0  # one full loading-spinner turn
 
 
 def _load_font(size: int):
@@ -98,6 +98,7 @@ class WaveOverlay:
         self._smoothed_amp = 0.0
         self._is_speech = False
         self._phase = 0.0
+        self._spin_deg = 0.0
         self._size = (_BADGE, _BADGE)
 
         self._icon = None
@@ -173,9 +174,11 @@ class WaveOverlay:
         self._panel = panel
         self._view = view
         try:
-            self._icon = _remove_artboard(
-                Image.open(resource_path("assets/icon-no-wave.png"))
-            ).resize((_BADGE, _BADGE), Image.Resampling.LANCZOS)
+            # Kept as a PIL Image, not baked into an NSImage: the loading
+            # spinner rotates it fresh from this source every frame.
+            self._icon = Image.open(resource_path(_LOGO)).convert("RGBA").resize(
+                (_BADGE, _BADGE), Image.Resampling.LANCZOS
+            )
         except Exception:
             log.debug("Overlay icon unavailable.", exc_info=True)
 
@@ -271,6 +274,7 @@ class WaveOverlay:
     def _render(self) -> None:
         width, height = self._size
         self._phase += 0.15
+        self._spin_deg = (self._spin_deg + 360.0 / (_SPIN_SECONDS * _FPS)) % 360.0
         with self._lock:
             amp, is_speech = self._amp, self._is_speech
         self._smoothed_amp = self._smoothed_amp * 0.72 + amp * 0.28
@@ -286,15 +290,10 @@ class WaveOverlay:
                 (width // 2, _MESSAGE_H // 2), self._message,
                 fill=_TEXT_COLOR, font=self._font_msg, anchor="mm",
             )
+        elif self._mode == "loading":
+            self._draw_loading_spin(frame)
         else:
-            if self._icon is not None:
-                frame.paste(self._icon, (0, 0), self._icon)
-            else:
-                draw.ellipse([2, 2, _BADGE - 2, _BADGE - 2], fill=(45, 49, 38, 255))
-            if self._mode == "loading":
-                self._draw_processing_bars(draw)
-            else:
-                self._draw_audio_bars(draw, is_speech)
+            self._draw_recording_circle(draw, is_speech)
 
         if self._hint_text:
             draw.text(
@@ -304,35 +303,30 @@ class WaveOverlay:
 
         self._view.setImage_(_pil_to_nsimage(frame))
 
-    def _draw_audio_bars(self, draw: ImageDraw.ImageDraw, is_speech: bool) -> None:
-        # Mirrors the three horizontal bars in icon.svg, scaled to badge size.
+    def _draw_loading_spin(self, frame: Image.Image) -> None:
+        """Rotate the logo clockwise. Since its green circle fills the canvas
+        edge-to-edge and is perfectly round, rotating the whole raster reads as
+        just the inner "s8" mark spinning — no need to separate it out."""
+        if self._icon is None:
+            ImageDraw.Draw(frame).ellipse(
+                [2, 2, _BADGE - 2, _BADGE - 2], fill=_BRAND_GREEN
+            )
+            return
+        # Negative angle: Pillow rotates counter-clockwise for positive degrees.
+        rotated = self._icon.rotate(-self._spin_deg, resample=Image.Resampling.BICUBIC)
+        frame.paste(rotated, (0, 0), rotated)
+
+    def _draw_recording_circle(self, draw: ImageDraw.ImageDraw, is_speech: bool) -> None:
+        """Green badge with a dark dot pulsing to the live audio level —
+        matches assets/flow-st8-icon-recording.svg, animated instead of static."""
         level = min(1.0, self._smoothed_amp * 18.0)
         if not is_speech:
             level = max(0.10, 0.18 + math.sin(self._phase * 2.2) * 0.05)
 
-        centers_y = [54.6, 58.7, 62.8]
-        max_widths = [7.0, 11.0, 15.0]
-        min_widths = [3.5, 5.0, 7.0]
-        x_center = _BADGE / 2 + 0.5
-        color = _BAR_ACTIVE if is_speech else _BAR_DIM
+        draw.ellipse([0, 0, _BADGE, _BADGE], fill=_BRAND_GREEN)
 
-        for i, y in enumerate(centers_y):
-            wobble = 0.82 + 0.18 * math.sin(self._phase * 2.4 + i * 1.7)
-            half = min_widths[i] + (max_widths[i] - min_widths[i]) * level * wobble
-            thickness = 2.1 + 0.8 * level
-            draw.line(
-                [(x_center - half, y), (x_center + half, y)],
-                fill=color, width=max(1, int(round(thickness))),
-            )
-
-    def _draw_processing_bars(self, draw: ImageDraw.ImageDraw) -> None:
-        centers_y = [54.6, 58.7, 62.8]
-        widths = [5.0, 8.5, 12.0]
-        x_center = _BADGE / 2 + 0.5
-        for i, y in enumerate(centers_y):
-            pulse = 0.45 + 0.55 * abs(math.sin(self._phase * 2.0 + i * 1.1))
-            half = widths[i] * pulse
-            draw.line(
-                [(x_center - half, y), (x_center + half, y)],
-                fill=_BAR_ACTIVE, width=2,
-            )
+        radius = _DOT_MIN_R + (_DOT_MAX_R - _DOT_MIN_R) * level
+        cx = cy = _BADGE / 2
+        draw.ellipse(
+            [cx - radius, cy - radius, cx + radius, cy + radius], fill=_BRAND_DARK
+        )
