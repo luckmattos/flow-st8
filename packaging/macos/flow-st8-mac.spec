@@ -34,6 +34,13 @@ datas += collect_data_files("silero_vad", includes=["data/*"])
 # runtime — in a bundle that otherwise looks complete.
 datas += collect_data_files("mlx", includes=["lib/*.metallib"])
 datas += collect_data_files("whisper", includes=["assets/*"])
+# mlx_whisper's own non-Python assets: the mel filterbank (.npz) and the two
+# tokenizer vocab files (.tiktoken). PyInstaller bundles the package's .py
+# files into the PYZ archive automatically but never picks up plain data
+# files on its own, so without this transcription fails deep inside MLX with
+# a cryptic "[load_npz] Input must be a zip file" — the file it wants simply
+# isn't there.
+datas += collect_data_files("mlx_whisper", includes=["assets/*"])
 
 # libmlx.dylib links libjaccl.dylib through @rpath. PyInstaller follows the
 # first but not the second, and the bundle then dies at `import mlx.core` with
