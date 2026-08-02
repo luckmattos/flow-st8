@@ -49,14 +49,19 @@ if ! security find-identity -p codesigning | grep -qF "\"$SIGN_IDENTITY\""; then
 fi
 
 # ---------------------------------------------------------------- icon
-step "Gerando o .icns a partir de assets/icon.png"
+step "Gerando o .icns a partir de assets/flow-st8-icon.png"
+# Source is a 100x100 raster (no vector renderer in the toolchain), so sizes
+# above ~256px are upscaled and softer than a true vector export would give.
+# Not a practical problem today: LSUIElement hides the Dock icon, so this
+# mostly shows up in Finder/Get Info. Swap in a higher-res source if that ever
+# matters more than it does now.
 ICONSET="$BUILD_DIR/flow-st8.iconset"
 rm -rf "$ICONSET"
 mkdir -p "$ICONSET"
 for size in 16 32 128 256 512; do
-    sips -z "$size" "$size" assets/icon.png \
+    sips -z "$size" "$size" assets/flow-st8-icon.png \
         --out "$ICONSET/icon_${size}x${size}.png" >/dev/null
-    sips -z "$((size * 2))" "$((size * 2))" assets/icon.png \
+    sips -z "$((size * 2))" "$((size * 2))" assets/flow-st8-icon.png \
         --out "$ICONSET/icon_${size}x${size}@2x.png" >/dev/null
 done
 iconutil -c icns "$ICONSET" -o "$ICNS"

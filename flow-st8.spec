@@ -5,8 +5,7 @@ from PyInstaller.utils.hooks import collect_data_files
 
 datas = [
     ('VERSION', '.'),
-    ('assets/icon.png', 'assets'),
-    ('assets/icon-no-wave.png', 'assets'),
+    ('assets/flow-st8-icon.png', 'assets'),
 ]
 datas += collect_data_files('silero_vad', includes=['data/*'])
 datas += collect_data_files('whisper', includes=['assets/*'])
