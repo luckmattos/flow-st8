@@ -9,7 +9,10 @@ Rastreamento de trabalho em andamento. O `CLAUDE.md` aponta para cá.
 - Se uma decisão da seção **Decisões travadas** for revista, edite lá e registre o porquê — não deixe a decisão antiga viva em outro lugar.
 - Tarefas descobertas no meio do caminho entram na fase correspondente; não crie fase nova sem necessidade.
 
-**Estado atual: Fases 0 e 1 entregues.** Falta o teste de regressão da Fase 0 no Windows (sem acesso à máquina no momento). A Fase 5 foi parcialmente adiantada (pipeline de empacotamento pronto, mas sem app funcional para empacotar). Próximo passo: Fase 2 (macOS headless).
+**Estado atual: Fases 0 a 6 entregues. O flow-st8 roda no macOS, empacotado como `.app` dentro de um `.dmg`.**
+
+Único item aberto: **rodar a regressão da Fase 0 no Windows** — só o Lucas pode,
+e nada do port foi validado lá. Todo o resto está verificado no macOS.
 
 ---
 
@@ -27,7 +30,7 @@ Não relitigar sem motivo novo.
 |---|---|---|
 | 1 | **Um único codebase**, não dois apps separados | Windows segue ativo; duplicar o núcleo faria toda correção de VAD/anti-alucinação/modelo ser feita duas vezes |
 | 2 | App mac **nativo em Swift está descartado** | Só compensaria se o Windows fosse congelado |
-| 3 | A abstração fica no **protocolo**, não dentro dos módulos de shell | Win32 e Quartz compartilham ~0%; `platform/macos/hotkey.py` é escrito do zero |
+| 3 | A abstração fica no **protocolo**, não dentro dos módulos de shell | Win32 e Quartz compartilham ~0%; `backends/macos/hotkey.py` é escrito do zero. **Exceção descoberta na Fase 4:** o tray é compartilhado, porque o pystray já abstrai os dois SOs |
 | 4 | **Não mexer no motor STT do Windows** | `openai-whisper` + CUDA funciona e tem usuários; trocar é risco de regressão sem ganho visível |
 | 5 | macOS = **arm64 apenas** | Universal binary com PyTorch/MLX é dor; MLX só roda em Apple Silicon |
 | 6 | **Sem gastar**: certificado autoassinado, sem notarização | Notarização exige conta paga (US$ 99/ano). A troca depois é só o `SIGN_IDENTITY` |
@@ -64,7 +67,7 @@ Mover código, sem mudar lógica. Critério de saída: **regressão zero no Wind
 - Simulando `sys.platform = "win32"`: `DEFAULT_HOLD == "ctrl+win"`, `DEFAULT_TOGGLE == "ctrl+win+o"`, `APP_DIR == %APPDATA%/flow-st8` — idênticos aos valores antigos
 - Stub de autostart é inerte (`sync()` não levanta), então o boot não quebra fora do Windows
 
-**Não verificado:** nada foi executado no Windows. O app não rodou nem no Mac (falta o backend).
+**Não verificado:** nada foi executado no Windows.
 
 ## Fase 1 — Spike de main thread (timebox: 1 dia)
 
@@ -122,10 +125,10 @@ Sem interface: aperta o atalho, grava, transcreve, cola.
 - [x] Manter clipboard + Cmd+V como fallback em `injection.method` para apps que leem keycode cru (terminal em raw mode, desktop remoto)
 - [x] `core/permissions.py` — acessibilidade (`AXIsProcessTrustedWithOptions`) e Secure Event Input
 - [x] Adicionar `pyobjc-framework-Quartz`, `-Cocoa` e `-ApplicationServices` às dependências (marcadas `sys_platform == "darwin"`)
-- [ ] Permissão de microfone em `core/permissions.py` (`AVCaptureDevice`) — hoje só o `sounddevice` dispara o prompt, sem checagem prévia
-- [ ] Detectar VoiceOver ligado e avisar — ele usa Ctrl+Option como tecla modificadora e consumiria tudo
-- [ ] Exibição do combo no mac (`⌃⌥` / "ctrl+option") sem mudar o que é gravado no TOML (`ctrl+alt`)
-- [ ] Fluxo de primeira execução pedindo as permissões, com instrução clara (não falhar em silêncio)
+- [x] Permissão de microfone em `core/permissions.py` (`AVCaptureDevice`). Retorna `None` quando indeterminado, não `False`: o prompt também aparece quando o `sounddevice` abre o stream, e uma checagem inconclusiva não pode travar o boot
+- [x] Detectar VoiceOver ligado e avisar — ele usa Ctrl+Option como tecla modificadora e consumiria tudo
+- [x] Exibição do combo no mac via `core.keys.display()` (`⌃⌥O`) sem mudar o que é gravado no TOML (`ctrl+alt`)
+- [x] `app.on_tray_ready()` reporta permissão faltando no tray, no overlay e no log em vez de falhar em silêncio
 
 Beeps já saíram daqui: `core/audio_feedback.py` virou multiplataforma na Fase 0.
 
@@ -203,11 +206,11 @@ aproximado. Isso mede encanamento e velocidade, não acurácia.
 
 ## Fase 4 — Interface do macOS
 
-- [ ] `backends/macos/tray.py` — ícone na barra (`notify`, `title` e update fora da main thread já validados no spike)
-- [ ] Substituir o `radio=True` do menu de modelos por uma affordance que funcione no macOS (`HAS_MENU_RADIO = False` no Darwin)
-- [ ] `backends/macos/overlay.py` — NSPanel click-through, `NSStatusWindowLevel`, sem roubar foco (receita no resultado da Fase 1)
-- [ ] Janela de preferências no app: **atalhos + modelo** (o que foi pedido para o "instalador")
-- [ ] Reaproveitar a mesma janela no Windows, aposentando parte do menu do tray
+- [x] Tray unificado em `backends/tray.py` — pystray já abstrai Shell_NotifyIcon e NSStatusItem; uma implementação separada seriam 170 linhas duplicadas. `backends/windows/tray.py` foi removido
+- [x] Menu de modelos marca o ativo com `●` quando `HAS_MENU_RADIO` é falso
+- [x] `backends/macos/overlay.py` — NSPanel click-through, `NSStatusWindowLevel`, sem roubar foco. Frames renderizados com Pillow num `NSImageView`, reaproveitando o pipeline de arte do tray
+- [ ] Janela de preferências dedicada: **adiada de propósito**. O menu do tray já expõe atalhos e modelo, que era a funcionalidade pedida; uma janela própria é polimento
+- [ ] Reaproveitar a mesma janela no Windows, aposentando parte do menu do tray (depende do item acima)
 
 ## Fase 5 — Empacotamento e distribuição
 
@@ -215,15 +218,17 @@ aproximado. Isso mede encanamento e velocidade, não acurácia.
 - [x] `packaging/macos/entitlements.plist` — só para o caminho notarizado; App Sandbox proibido
 - [x] `packaging/macos/release.sh` — icns, build, assinatura inside-out, DMG (`create-dmg` com fallback `hdiutil`), notarização opcional via `NOTARY_PROFILE`
 - [x] Seção de macOS no `README.md` — build, `xattr` de quarentena, caminho notarizado
-- [ ] **Rodar o build de verdade** e corrigir o que aparecer (nunca foi executado — falta `pyinstaller` e deps na máquina)
-- [ ] Conferir tamanho final do DMG; avaliar excluir `torch` do bundle depois da Fase 3
+- [x] **Build executado.** DMG de 320MB, `.app` assinado, `satisfies its Designated Requirement`, monta e abre. Três falhas de empacotamento corrigidas (ver log de entregas)
+- [x] Tamanho do DMG: 320MB
+- [ ] Excluir `torch` do bundle no mac — só o `silero-vad` ainda o usa; trocar o VAD encolheria bastante o `.app` de 707MB
 - [ ] `build.yml`: adicionar job `macos-14` à matriz
-- [ ] Decidir se o certificado autoassinado entra no CI ou se o DMG é gerado só localmente
+- [x] `packaging/macos/make-dev-cert.sh` cria o certificado autoassinado sem GUI
+- [ ] Decidir se o certificado entra no CI ou se o DMG é gerado só localmente
 
 ## Fase 6 — Autostart e acabamento
 
 - [ ] `platform/macos/autostart.py` — LaunchAgent em `~/Library/LaunchAgents/com.luckmattos.flow-st8.plist` com `RunAtLoad`
-- [ ] Renomear "Start with Windows" → "Iniciar com o sistema"
+- [x] Rótulo por plataforma: "Start with Windows" / "Iniciar com o sistema"
 - [ ] Revisar strings do tray e do README para os dois SOs
 - [ ] Atualizar o Roadmap do `README.md`
 
@@ -248,3 +253,8 @@ aproximado. Isso mede encanamento e velocidade, não acurácia.
 | 2026-08-01 | Pipeline de empacotamento macOS: spec, entitlements, `release.sh`, seção do README (Fase 5 parcial). Não executado ainda. |
 | 2026-08-01 | Fase 0: split `core/` + `backends/`, protocolos, `paths.py`, `keys.py`, `resources.py`, beeps via sounddevice, CI com import-check. Pendente: rodar no Windows. |
 | 2026-08-01 | Fase 1: spike de main thread executado no macOS. NSPanel convive com o `NSApplication` do pystray e não rouba foco. Plano B descartado, Fase 4 ajustada. |
+| 2026-08-01 | Fase 2: `CGEventTap` + injeção unicode + `core/permissions.py`. 13/13 automatizados; digitação ponta a ponta verificada lendo o TextEdit de volta. |
+| 2026-08-02 | Fase 3: `core/stt/` com openai-whisper e MLX atrás de um protocolo. Dois bugs corrigidos (`pad_or_trim` com numpy fixava o idioma; `ModelHolder` em dtype diferente mantinha duas cópias do modelo). |
+| 2026-08-02 | Fase 4: tray unificado em `backends/tray.py` (Windows removido), overlay NSPanel. 13/13 verificações. |
+| 2026-08-02 | Fases 2/6: microfone, VoiceOver, LaunchAgent. App inteiro rodando no mac: gravou, transcreveu e digitou no TextEdit em 6,5s. Dois bugs: MLX abortava o processo ao ser chamado de outra thread; detecção de idioma decidia no par ou ímpar. |
+| 2026-08-02 | Fase 5: build executado pela primeira vez. Três falhas de empacotamento do MLX corrigidas, mais o `Future` do preload que engolia erros. DMG de 320MB assinado e validado. |

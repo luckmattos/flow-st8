@@ -2,17 +2,17 @@
 
 ![flow-st8](assets/banner.svg)
 
-Local voice-to-text for Windows. Hold `Ctrl+Win` to record, release to transcribe, and flow-st8 pastes your words wherever your cursor is. No cloud, no subscription, no audio leaving your machine.
+Local voice-to-text for Windows and macOS. Hold the shortcut to record, release to transcribe, and flow-st8 types your words wherever your cursor is. No cloud, no subscription, no audio leaving your machine.
 
 ---
 
 ## Highlights
 
-- Local Whisper transcription with GPU acceleration when available
+- Local Whisper transcription with GPU acceleration on both platforms — CUDA on Windows, Metal via MLX on Apple Silicon
 - Push-to-talk and hands-free toggle hotkeys
 - Live recording badge with audio-reactive bars
 - System tray menu for model switching, hotkey remapping, autostart, and quit
-- Packaged Windows installer and app executable
+- Packaged Windows installer and macOS `.app`/`.dmg`
 - Privacy-first: audio is processed locally and discarded
 
 ---
@@ -33,11 +33,24 @@ python install.py
 
 ---
 
-## macOS (work in progress)
+## macOS
 
-The macOS build is not usable yet — the platform layer (global hotkey, text
-injection, overlay, tray) is still Windows-only. The packaging pipeline below is
-already in place so the app can ship as soon as that lands.
+Apple Silicon only. Transcription runs on the GPU through MLX; the same model
+on the CPU takes 20-45s per phrase, which reads as a frozen app.
+
+| Hotkey | Behavior |
+|---|---|
+| Hold `⌃⌥` (Ctrl+Option) | Push-to-talk |
+| Press `⌃⌥O` | Toggle: press to start, press again to stop |
+
+Ctrl+Option rather than anything with Cmd: push-to-talk holds the combo for
+several seconds while you speak, and every destructive macOS shortcut carries
+Cmd — `Ctrl+Cmd+Q` locks the screen.
+
+On first launch macOS will ask for **Accessibility** (to read the global
+shortcut and type for you) and **Microphone**. Without Accessibility the app
+starts but never reacts to the hotkey, so it reports the missing permission in
+the menu bar instead of looking broken.
 
 ### Building the DMG
 
@@ -51,10 +64,12 @@ The script signs with a **self-signed certificate** by default, which costs
 nothing and keeps the app's Accessibility permission from being revoked on every
 rebuild. Create one once:
 
-> Keychain Access → Certificate Assistant → Create a Certificate
-> Name: `flow-st8-dev` · Type: Self Signed Root · Certificate Type: Code Signing
+```bash
+./packaging/macos/make-dev-cert.sh
+```
 
-Override with `SIGN_IDENTITY=<name>` if you use a different one.
+It lands in a dedicated keychain, so no login password is involved and removing
+it is one command. Override with `SIGN_IDENTITY=<name>` to use a different one.
 
 ### Installing an unsigned build
 
@@ -129,7 +144,8 @@ The installer is not the daily app. After setup, run `flow-st8.exe` or the short
 Config file:
 
 ```text
-%APPDATA%\flow-st8\config.toml
+Windows   %APPDATA%\flow-st8\config.toml
+macOS     ~/Library/Application Support/flow-st8/config.toml
 ```
 
 Example:
@@ -141,6 +157,8 @@ language = "auto"
 initial_prompt = ""
 
 [hotkey]
+# Windows defaults; on macOS these are "ctrl+alt" and "ctrl+alt+o".
+# "win", "super", "cmd" and "meta" all mean the OS modifier key.
 hold_key = "ctrl+win"
 toggle_key = "ctrl+win+o"
 
@@ -195,10 +213,11 @@ Everything runs locally.
 |---|---|
 | Speech-to-text | OpenAI Whisper + PyTorch |
 | Voice detection | Silero VAD |
-| Global hotkey | Win32 low-level keyboard hook via `ctypes` |
+| Speech-to-text (macOS) | MLX Whisper on the Apple GPU |
+| Global hotkey | `WH_KEYBOARD_LL` (Windows) · `CGEventTap` (macOS) |
 | Audio capture | `sounddevice` |
-| Text injection | Clipboard + Win32 `SendInput` |
-| UI | Tkinter overlay + pystray |
+| Text injection | Clipboard + `SendInput` (Windows) · `CGEventKeyboardSetUnicodeString` (macOS) |
+| UI | pystray + Tkinter overlay (Windows) / NSPanel (macOS) |
 | Packaging | PyInstaller |
 
 ---
@@ -208,6 +227,7 @@ Everything runs locally.
 - [x] Packaged Windows app
 - [x] Setup wizard
 - [x] Live audio overlay
+- [x] macOS support (Apple Silicon)
 - [ ] Auto-updater
 - [ ] Transcription history
 - [ ] Per-app custom prompts
