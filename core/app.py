@@ -18,6 +18,7 @@ from backends import (
 from core import audio_feedback as feedback
 from core import keys, permissions
 from core.config import Config, save_config
+from core.paths import LOG_PATH
 from core.recorder import AudioRecorder
 from core.transcriber import Transcriber
 from core.vad import SileroVAD
@@ -89,6 +90,16 @@ class FlowSt8App:
         """Load the Whisper model at startup, showing a loading badge until ready."""
         try:
             self.transcriber.preload()
+        except Exception:
+            # Nobody reads this Future, so an unhandled error here would vanish
+            # and the app would sit there looking ready but transcribing nothing.
+            log.exception("Model preload failed")
+            self.tray.notify(
+                "Falha ao carregar o modelo de transcrição. Veja o log em "
+                f"{LOG_PATH}."
+            )
+            self.tray.set_state("error")
+            return
         finally:
             self._model_loading = False
             self.overlay.hide()
