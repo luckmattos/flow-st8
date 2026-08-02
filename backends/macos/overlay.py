@@ -52,8 +52,12 @@ _LOGO = "assets/flow-st8-icon.png"
 # than the badge canvas (not edge-to-edge like the loading spinner) so it
 # never clips against the panel bounds.
 _REC_CIRCLE_R = _BADGE / 4.0
-_DOT_MIN_R = 3.5
-_DOT_MAX_R = 7.5
+# Wide swing on purpose — a narrow range reads as barely pulsing even when
+# the underlying level swing is large, since a few pixels of radius change is
+# hard to perceive. Max stays short of _REC_CIRCLE_R so a ring of green is
+# always visible, even at peak level.
+_DOT_MIN_R = 2.5
+_DOT_MAX_R = 12.0
 
 _SPIN_SECONDS = 2.0  # one full loading-spinner turn
 
@@ -382,7 +386,10 @@ class WaveOverlay:
     ) -> None:
         """Green badge with a dark dot pulsing to the live audio level —
         matches assets/flow-st8-icon-recording.svg, animated instead of static."""
-        level = min(1.0, self._smoothed_amp * 18.0)
+        # Real speech through a built-in mic runs quieter than the synthetic
+        # tones this was first tuned against — 24x instead of 18x reaches full
+        # size at normal speaking volume, not just when talking loudly.
+        level = min(1.0, self._smoothed_amp * 24.0)
         if not is_speech:
             level = max(0.10, 0.18 + math.sin(self._phase * 2.2) * 0.05)
 
