@@ -171,7 +171,7 @@ class Installer(tk.Tk):
 
     def _load_logo(self, size: int):
         try:
-            image = tk.PhotoImage(master=self, file=str(_resource_path("assets/icon.png")))
+            image = tk.PhotoImage(master=self, file=str(_resource_path("assets/flow-st8-icon.png")))
             factor = max(1, image.width() // size)
             return image.subsample(factor, factor)
         except Exception:

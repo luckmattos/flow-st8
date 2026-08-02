@@ -21,3 +21,27 @@ jobs:
 
       - name: Validate Python syntax
         run: python -m compileall .
+
+      # Guards the core/backends split: if a Windows-only import (winsound,
+      # ctypes.windll, winreg) leaks back into core/, this fails on Linux.
+      # Deliberately dependency-free, so it stays fast.
+      - name: Core imports on a non-Windows platform
+        run: |
+          python - <<'PY'
+          import backends, backends.base
+          import core.config, core.keys, core.paths, core.resources
+
+          assert not backends.SUPPORTED, "Linux should not report a supported backend"
+          assert core.keys.OS_MOD == "win", "non-darwin platforms use 'win'"
+          assert core.keys.normalize("Ctrl+Super") == "ctrl+win"
+          assert core.keys.normalize("CMD+ctrl") == "win+ctrl"
+          assert core.keys.is_modifier_only("ctrl+win")
+          assert not core.keys.is_modifier_only("ctrl+win+o")
+          assert core.config.HotkeyConfig().hold_key == "ctrl+win"
+          assert core.paths.APP_DIR.name == "flow-st8"
+
+          # Autostart stub must be inert, not explosive: boot calls sync().
+          backends.autostart.sync(True)
+          assert backends.autostart.is_enabled() is False
+          print("core imports clean on", __import__("sys").platform)
+          PY

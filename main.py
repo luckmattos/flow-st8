@@ -1,11 +1,13 @@
-"""flow-st8 - Lightweight local voice transcription for Windows."""
+"""flow-st8 - Lightweight local voice transcription."""
 
 import logging
 import sys
 from logging.handlers import RotatingFileHandler
 
-from config import APP_DIR, load_config
-from app import FlowSt8App
+from core import singleton
+from core.app import FlowSt8App
+from core.config import load_config
+from core.paths import APP_DIR, LOG_PATH
 from version import __version__
 
 
@@ -24,7 +26,7 @@ def _setup_logging() -> None:
     handlers = [
         logging.StreamHandler(sys.stderr),
         RotatingFileHandler(
-            APP_DIR / "flow-st8.log",
+            LOG_PATH,
             maxBytes=512_000,
             backupCount=2,
             encoding="utf-8",
@@ -44,10 +46,20 @@ def main() -> None:
     _setup_logging()
     log = logging.getLogger("flow-st8")
 
+    if not singleton.acquire():
+        # Expected the first time autostart turns on while the app is already
+        # running manually: enabling it loads the LaunchAgent immediately (so
+        # the change applies without a logout), and RunAtLoad then starts a
+        # second process a few seconds later. On macOS a duplicate is not
+        # harmless like on Windows — CGEventTap has no exclusivity, so both
+        # processes would react to the same keypress. Decline quietly instead.
+        log.info("Another flow-st8 instance is already running. Exiting.")
+        return
+
     log.info("Loading configuration...")
     config = load_config()
 
-    import autostart
+    from backends import autostart
     autostart.sync(config.startup.autostart)
 
     log.info(

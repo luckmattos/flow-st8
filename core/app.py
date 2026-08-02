@@ -1,21 +1,27 @@
 """flow-st8 application orchestrator."""
 
 import logging
+import sys
 import threading
 from concurrent.futures import ThreadPoolExecutor
 from typing import Callable
 
 import numpy as np
 
-import audio_feedback as feedback
-from config import Config, save_config
-from hotkey import HotkeyManager, check_combo_conflict
-from injector import TextInjector
-from overlay import WaveOverlay
-from recorder import AudioRecorder
-from transcriber import Transcriber
-from tray import TrayIcon
-from vad import SileroVAD
+from backends import (
+    HotkeyManager,
+    TextInjector,
+    TrayIcon,
+    WaveOverlay,
+    check_combo_conflict,
+)
+from core import audio_feedback as feedback
+from core import keys, permissions
+from core.config import Config, save_config
+from core.paths import LOG_PATH
+from core.recorder import AudioRecorder
+from core.transcriber import Transcriber
+from core.vad import SileroVAD
 
 log = logging.getLogger(__name__)
 
@@ -55,10 +61,45 @@ class FlowSt8App:
         self.hotkey.start()
         log.info("flow-st8 started. Press %s to record.", self.config.hotkey.key)
 
+    def on_tray_ready(self) -> None:
+        """Called once the tray's event loop is running.
+
+        On macOS this is the first moment AppKit exists, so it is where the app
+        becomes an accessory (no Dock icon) and where a missing permission is
+        reported — the tap installs silently either way, so without this the
+        app would just look broken.
+        """
+        if sys.platform == "darwin":
+            try:
+                import AppKit
+
+                AppKit.NSApp().setActivationPolicy_(
+                    AppKit.NSApplicationActivationPolicyAccessory
+                )
+            except Exception:
+                log.debug("Could not set the accessory activation policy.", exc_info=True)
+
+        missing = permissions.describe_missing(self.config.hotkey.hold_key)
+        if missing:
+            log.warning("%s", missing)
+            self.tray.set_state("error")
+            self.tray.notify(missing)
+            self.overlay.show_message("Permissão faltando")
+
     def _preload_with_feedback(self) -> None:
         """Load the Whisper model at startup, showing a loading badge until ready."""
         try:
             self.transcriber.preload()
+        except Exception:
+            # Nobody reads this Future, so an unhandled error here would vanish
+            # and the app would sit there looking ready but transcribing nothing.
+            log.exception("Model preload failed")
+            self.tray.notify(
+                "Falha ao carregar o modelo de transcrição. Veja o log em "
+                f"{LOG_PATH}."
+            )
+            self.tray.set_state("error")
+            return
         finally:
             self._model_loading = False
             self.overlay.hide()
@@ -207,19 +248,19 @@ class FlowSt8App:
             self.tray.notify(warning)
             return
 
-        _MODS = {"ctrl", "control", "win", "super", "shift", "alt"}
+        new_key = keys.normalize(new_key)
 
         if target == "hold":
-            non_mod = {p.strip().lower() for p in new_key.split("+")} - _MODS
-            if non_mod:
+            if not keys.is_modifier_only(new_key):
                 self.tray.notify(
-                    f"Hold must be modifier keys only (e.g. ctrl+win). Got: {new_key}"
+                    f"Hold must be modifier keys only (e.g. {keys.DEFAULT_HOLD}). "
+                    f"Got: {new_key}"
                 )
                 return
 
         if target == "toggle":
-            hold_parts = {p.strip().lower() for p in self.config.hotkey.hold_key.split("+")}
-            new_parts = {p.strip().lower() for p in new_key.split("+")}
+            hold_parts = keys.parts(self.config.hotkey.hold_key)
+            new_parts = keys.parts(new_key)
             if not hold_parts <= new_parts:
                 missing = hold_parts - new_parts
                 self.tray.notify(
@@ -227,7 +268,7 @@ class FlowSt8App:
                     f"Missing: {', '.join(sorted(missing))}"
                 )
                 return
-            extra_non_mod = (new_parts - hold_parts) - _MODS
+            extra_non_mod = (new_parts - hold_parts) - keys.MODIFIERS
             if not extra_non_mod:
                 self.tray.notify(
                     f"Toggle needs one extra key beyond hold. "

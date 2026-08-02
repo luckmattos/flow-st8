@@ -5,8 +5,7 @@ from PyInstaller.utils.hooks import collect_data_files
 
 datas = [
     ('VERSION', '.'),
-    ('assets/icon.png', 'assets'),
-    ('assets/icon-no-wave.png', 'assets'),
+    ('assets/flow-st8-icon.png', 'assets'),
 ]
 datas += collect_data_files('silero_vad', includes=['data/*'])
 datas += collect_data_files('whisper', includes=['assets/*'])
@@ -17,7 +16,16 @@ a = Analysis(
     pathex=[],
     binaries=[],
     datas=datas,
-    hiddenimports=['ctypes', 'sounddevice', 'pyperclip', 'silero_vad.data'],
+    hiddenimports=[
+        'ctypes', 'sounddevice', 'pyperclip', 'silero_vad.data',
+        # backends/__init__.py imports these behind `if sys.platform == "win32"`;
+        # list them so the analysis never has to guess the branch.
+        'backends.windows.autostart',
+        'backends.windows.hotkey',
+        'backends.windows.injector',
+        'backends.windows.overlay',
+        'backends.windows.tray',
+    ],
     hookspath=[],
     hooksconfig={},
     runtime_hooks=[],
