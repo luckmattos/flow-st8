@@ -19,9 +19,11 @@ Local voice-to-text for Windows and macOS. Hold the shortcut to record, release 
 
 ## Install
 
-Download and run the latest `flow-st8-setup.exe` from GitHub Releases.
-
+**Windows** — download and run the latest `flow-st8-setup.exe` from GitHub Releases.
 The setup wizard detects your hardware, installs dependencies, writes config, creates a desktop shortcut, and can enable autostart.
+
+**macOS** — see [macOS](#macos) below. Builds are produced locally for now; drag
+`flow-st8.app` from the DMG into Applications.
 
 For development:
 
@@ -115,16 +117,18 @@ The app lives in the system tray while it listens for hotkeys.
 
 ## How To Use
 
-| Hotkey | Behavior |
-|---|---|
-| Hold `Ctrl+Win` | Push-to-talk: hold to record, release to transcribe |
-| Press `Ctrl+Win+O` | Toggle: press to start, press again to stop |
+| Windows | macOS | Behavior |
+|---|---|---|
+| Hold `Ctrl+Win` | Hold `⌃⌥` | Push-to-talk: hold to record, release to transcribe |
+| Press `Ctrl+Win+O` | Press `⌃⌥O` | Toggle: press to start, press again to stop |
 
-1. Hold `Ctrl+Win`; the floating badge appears and reacts to your voice.
+1. Hold the shortcut; the floating badge appears and reacts to your voice.
 2. Talk normally; silence is filtered with VAD.
-3. Release `Ctrl+Win`; flow-st8 transcribes and pastes the text.
+3. Release; flow-st8 transcribes and types the text.
 
-Tip: press `Ctrl+Win+O` mid-hold to lock recording in hands-free mode.
+Tip: press the toggle mid-hold to lock recording in hands-free mode.
+
+Both are remappable from the tray menu.
 
 ---
 
@@ -211,9 +215,9 @@ Everything runs locally.
 
 | Layer | Technology |
 |---|---|
-| Speech-to-text | OpenAI Whisper + PyTorch |
-| Voice detection | Silero VAD |
+| Speech-to-text (Windows) | OpenAI Whisper + PyTorch, CUDA when available |
 | Speech-to-text (macOS) | MLX Whisper on the Apple GPU |
+| Voice detection | Silero VAD |
 | Global hotkey | `WH_KEYBOARD_LL` (Windows) · `CGEventTap` (macOS) |
 | Audio capture | `sounddevice` |
 | Text injection | Clipboard + `SendInput` (Windows) · `CGEventKeyboardSetUnicodeString` (macOS) |
