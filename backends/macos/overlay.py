@@ -57,6 +57,13 @@ _DOT_MAX_R = 7.5
 
 _SPIN_SECONDS = 2.0  # one full loading-spinner turn
 
+# Pillow's ImageDraw has no anti-aliasing: ellipse() rasterizes with a hard,
+# jagged edge at any resolution. Drawing 4x oversize and downsampling with a
+# quality filter is what actually produces a smooth edge — the Retina fix
+# alone (matching physical pixels) only stopped the OS from blurring an
+# already-jagged bitmap further, it didn't smooth the jaggedness itself.
+_SUPERSAMPLE = 4
+
 
 def _load_font(size: int):
     for path in (
@@ -70,14 +77,31 @@ def _load_font(size: int):
     return ImageFont.load_default()
 
 
-def _pil_to_nsimage(image: Image.Image) -> AppKit.NSImage:
+def _backing_scale() -> float:
+    """Retina factor of the main screen (2.0 on virtually every Mac sold since
+    2012). Everything we draw is rendered at this many actual pixels per point
+    — skip it and NSImageView silently upscales a 1x bitmap to fill a 2x view,
+    which is exactly the blur/soft-edges a flat-fill circle makes obvious."""
+    try:
+        screen = AppKit.NSScreen.mainScreen()
+        if screen is not None:
+            return float(screen.backingScaleFactor())
+    except Exception:
+        pass
+    return 1.0
+
+
+def _pil_to_nsimage(image: Image.Image, point_size: tuple[float, float]) -> AppKit.NSImage:
+    """`image` is full-resolution pixels; `point_size` is the logical size the
+    view should occupy. Keeping them separate is what makes this a proper
+    Retina NSImage instead of a bitmap the view has to stretch."""
     data = image.tobytes("raw", "RGBA")
     rep = AppKit.NSBitmapImageRep.alloc().initWithBitmapDataPlanes_pixelsWide_pixelsHigh_bitsPerSample_samplesPerPixel_hasAlpha_isPlanar_colorSpaceName_bytesPerRow_bitsPerPixel_(
         None, image.width, image.height, 8, 4, True, False,
         AppKit.NSDeviceRGBColorSpace, image.width * 4, 32,
     )
     rep.bitmapData()[:] = data
-    ns = AppKit.NSImage.alloc().initWithSize_(AppKit.NSMakeSize(image.width, image.height))
+    ns = AppKit.NSImage.alloc().initWithSize_(AppKit.NSMakeSize(*point_size))
     ns.addRepresentation_(rep)
     return ns
 
@@ -103,10 +127,11 @@ class WaveOverlay:
         self._phase = 0.0
         self._spin_deg = 0.0
         self._size = (_BADGE, _BADGE)
+        self._scale = 1.0  # replaced with the real backing scale in _ensure_panel
 
         self._icon = None
-        self._font_msg = _load_font(12)
-        self._font_hint = _load_font(10)
+        self._font_msg = None
+        self._font_hint = None
 
     # ------------------------------------------------------------------
     # Public API (thread-safe)
@@ -151,6 +176,10 @@ class WaveOverlay:
         if self._panel is not None:
             return
 
+        self._scale = _backing_scale()
+        self._font_msg = _load_font(round(12 * self._scale))
+        self._font_hint = _load_font(round(10 * self._scale))
+
         rect = AppKit.NSMakeRect(0, 0, _BADGE, _BADGE)
         panel = AppKit.NSPanel.alloc().initWithContentRect_styleMask_backing_defer_(
             rect,
@@ -178,9 +207,13 @@ class WaveOverlay:
         self._view = view
         try:
             # Kept as a PIL Image, not baked into an NSImage: the loading
-            # spinner rotates it fresh from this source every frame.
+            # spinner rotates it fresh from this source every frame. Resized
+            # straight to physical-pixel size (68pt * scale) so there is one
+            # clean LANCZOS resize from the 100px source instead of stacking a
+            # second, lower-quality resize when AppKit fits it to the view.
+            px = round(_BADGE * self._scale)
             self._icon = Image.open(resource_path(_LOGO)).convert("RGBA").resize(
-                (_BADGE, _BADGE), Image.Resampling.LANCZOS
+                (px, px), Image.Resampling.LANCZOS
             )
         except Exception:
             log.debug("Overlay icon unavailable.", exc_info=True)
@@ -275,62 +308,89 @@ class WaveOverlay:
     # ------------------------------------------------------------------
 
     def _render(self) -> None:
-        width, height = self._size
+        width, height = self._size  # points — drive window geometry, unscaled
+        scale = self._scale
         self._phase += 0.15
         self._spin_deg = (self._spin_deg + 360.0 / (_SPIN_SECONDS * _FPS)) % 360.0
         with self._lock:
             amp, is_speech = self._amp, self._is_speech
         self._smoothed_amp = self._smoothed_amp * 0.72 + amp * 0.28
 
-        frame = Image.new("RGBA", (width, height), (0, 0, 0, 0))
-        draw = ImageDraw.Draw(frame)
+        # Physical-pixel canvas (points * scale) so nothing needs OS stretching.
+        pw, ph = round(width * scale), round(height * scale)
 
-        if self._mode == "message":
-            draw.rounded_rectangle(
-                [0, 0, width - 1, _MESSAGE_H - 1], radius=8, fill=_MESSAGE_BG
-            )
-            draw.text(
-                (width // 2, _MESSAGE_H // 2), self._message,
-                fill=_TEXT_COLOR, font=self._font_msg, anchor="mm",
-            )
-        elif self._mode == "loading":
-            self._draw_loading_spin(frame)
+        if self._mode == "loading":
+            # The logo path (PNG source -> LANCZOS resize -> BICUBIC rotation)
+            # is already smooth; supersampling would just cost two extra
+            # resize passes for no visible gain.
+            frame = Image.new("RGBA", (pw, ph), (0, 0, 0, 0))
+            self._draw_loading_spin(frame, scale)
         else:
-            self._draw_recording_circle(draw, is_speech)
+            # ImageDraw has no anti-aliasing — ellipse()/rounded_rectangle()
+            # rasterize with a hard, jagged edge at any resolution. Drawing
+            # oversize and downsampling with LANCZOS is what actually smooths
+            # the recording dot and the message bubble's rounded corners.
+            ss = _SUPERSAMPLE
+            big = Image.new("RGBA", (pw * ss, ph * ss), (0, 0, 0, 0))
+            draw = ImageDraw.Draw(big)
+            if self._mode == "message":
+                msg_h = _MESSAGE_H * scale * ss
+                draw.rounded_rectangle(
+                    [0, 0, pw * ss - 1, msg_h - 1], radius=8 * scale * ss, fill=_MESSAGE_BG
+                )
+                try:
+                    msg_font = self._font_msg.font_variant(size=round(12 * scale * ss))
+                except Exception:
+                    msg_font = self._font_msg  # bitmap fallback font: not resizable
+                draw.text(
+                    (pw * ss // 2, msg_h // 2), self._message,
+                    fill=_TEXT_COLOR, font=msg_font, anchor="mm",
+                )
+            else:
+                self._draw_recording_circle(draw, is_speech, scale * ss)
+            frame = big.resize((pw, ph), Image.Resampling.LANCZOS)
 
         if self._hint_text:
+            # Fresh Draw bound to the final native-resolution frame: the
+            # loading branch never created one, and the other branch's `draw`
+            # is bound to the discarded supersampled buffer, not this frame.
+            draw = ImageDraw.Draw(frame)
             draw.text(
-                (width // 2, _BADGE + _HINT_H // 2), self._hint_text,
+                (pw // 2, (_BADGE + _HINT_H / 2) * scale), self._hint_text,
                 fill=_HINT_COLOR, font=self._font_hint, anchor="mm",
             )
 
-        self._view.setImage_(_pil_to_nsimage(frame))
+        self._view.setImage_(_pil_to_nsimage(frame, (width, height)))
 
-    def _draw_loading_spin(self, frame: Image.Image) -> None:
+    def _draw_loading_spin(self, frame: Image.Image, scale: float) -> None:
         """Rotate the logo clockwise. Since its green circle fills the canvas
         edge-to-edge and is perfectly round, rotating the whole raster reads as
         just the inner "s8" mark spinning — no need to separate it out."""
         if self._icon is None:
+            inset = 2 * scale
             ImageDraw.Draw(frame).ellipse(
-                [2, 2, _BADGE - 2, _BADGE - 2], fill=_BRAND_GREEN
+                [inset, inset, _BADGE * scale - inset, _BADGE * scale - inset],
+                fill=_BRAND_GREEN,
             )
             return
         # Negative angle: Pillow rotates counter-clockwise for positive degrees.
         rotated = self._icon.rotate(-self._spin_deg, resample=Image.Resampling.BICUBIC)
         frame.paste(rotated, (0, 0), rotated)
 
-    def _draw_recording_circle(self, draw: ImageDraw.ImageDraw, is_speech: bool) -> None:
+    def _draw_recording_circle(
+        self, draw: ImageDraw.ImageDraw, is_speech: bool, scale: float
+    ) -> None:
         """Green badge with a dark dot pulsing to the live audio level —
         matches assets/flow-st8-icon-recording.svg, animated instead of static."""
         level = min(1.0, self._smoothed_amp * 18.0)
         if not is_speech:
             level = max(0.10, 0.18 + math.sin(self._phase * 2.2) * 0.05)
 
-        cx = cy = _BADGE / 2
-        r = _REC_CIRCLE_R
+        cx = cy = _BADGE * scale / 2
+        r = _REC_CIRCLE_R * scale
         draw.ellipse([cx - r, cy - r, cx + r, cy + r], fill=_BRAND_GREEN)
 
-        radius = _DOT_MIN_R + (_DOT_MAX_R - _DOT_MIN_R) * level
+        radius = (_DOT_MIN_R + (_DOT_MAX_R - _DOT_MIN_R) * level) * scale
         draw.ellipse(
             [cx - radius, cy - radius, cx + radius, cy + radius], fill=_BRAND_DARK
         )
