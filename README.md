@@ -10,7 +10,7 @@ Local voice-to-text for Windows and macOS. Hold the shortcut to record, release 
 
 - Local Whisper transcription with GPU acceleration on both platforms — CUDA on Windows, Metal via MLX on Apple Silicon
 - Push-to-talk and hands-free toggle hotkeys
-- Live recording badge with audio-reactive bars
+- Live recording badge whose dot tracks your voice on a calibrated loudness scale
 - System tray menu for model switching, hotkey remapping, autostart, and quit
 - Packaged Windows installer and macOS `.app`/`.dmg`
 - Privacy-first: audio is processed locally and discarded
@@ -208,6 +208,30 @@ flow-st8 does not:
 - Store your recordings
 
 Everything runs locally.
+
+---
+
+## Architecture
+
+A portable core with an OS-specific shell around it:
+
+```text
+core/       Portable. Config, paths, recorder, VAD, transcriber, STT backends.
+backends/   The shell. Hotkey, injector, overlay, autostart — per platform.
+  windows/  Win32 through ctypes
+  macos/    AppKit/Quartz through pyobjc
+  tray.py   Shared: pystray already abstracts both systems
+```
+
+The two shells deliberately share no code — each is written against the
+protocols in `backends/base.py` rather than a common abstraction, because the
+platform APIs have little in common beyond what they accomplish. The tray is
+the one exception: pystray already covers `Shell_NotifyIcon` and
+`NSStatusItem`, so duplicating it would mean 170 identical lines.
+
+`import backends` never fails. A platform with no shell gets stubs that raise
+only when used, which is what keeps `core/` importable in CI and on machines
+that cannot run the OS layer.
 
 ---
 
