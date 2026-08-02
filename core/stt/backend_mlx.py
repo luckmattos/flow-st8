@@ -9,6 +9,7 @@ engines share the same anti-hallucination behaviour.
 from __future__ import annotations
 
 import logging
+from concurrent.futures import ThreadPoolExecutor
 
 import numpy as np
 
@@ -39,13 +40,44 @@ def repo_for(model_name: str) -> str:
 
 
 class MlxWhisperBackend:
+    """All MLX work is pinned to one thread.
+
+    MLX streams are thread-local: a model loaded on one thread and used from
+    another aborts the process with "There is no Stream(gpu, N) in current
+    thread" — an uncatchable C++ abort, not a Python exception. The app calls
+    transcribe from a ThreadPoolExecutor, so without this the first
+    transcription after startup would kill the app. Serialising GPU work is
+    wanted anyway; the model is not reentrant.
+    """
+
     def __init__(self, model_name: str):
         self._model_name = model_name
         self._repo = repo_for(model_name)
         self._model = None
         self.name = "mlx (Apple GPU)"
+        self._runner = ThreadPoolExecutor(
+            max_workers=1, thread_name_prefix="mlx"
+        )
+
+    def close(self) -> None:
+        self._runner.shutdown(wait=False)
 
     def load(self) -> None:
+        self._runner.submit(self._load).result()
+
+    def language_probs(self, audio: np.ndarray, allowed: tuple[str, ...]) -> dict[str, float]:
+        return self._runner.submit(self._language_probs, audio, allowed).result()
+
+    def transcribe(
+        self, audio: np.ndarray, language: str, initial_prompt: str | None
+    ) -> list[dict]:
+        return self._runner.submit(
+            self._transcribe, audio, language, initial_prompt
+        ).result()
+
+    # -- everything below runs on the mlx thread ------------------------
+
+    def _load(self) -> None:
         import mlx.core as mx
         from mlx_whisper.transcribe import ModelHolder
 
@@ -57,7 +89,7 @@ class MlxWhisperBackend:
         self._model = ModelHolder.get_model(self._repo, _dtype())
         log.info("MLX Whisper model loaded (%s).", self.name)
 
-    def detect_language(self, audio: np.ndarray, allowed: tuple[str, ...]) -> str:
+    def _language_probs(self, audio: np.ndarray, allowed: tuple[str, ...]) -> dict[str, float]:
         import mlx.core as mx
         from mlx_whisper.audio import log_mel_spectrogram, pad_or_trim
         from mlx_whisper.decoding import detect_language
@@ -70,15 +102,9 @@ class MlxWhisperBackend:
         mel = log_mel_spectrogram(pad_or_trim(samples), n_mels=n_mels).astype(_dtype())
         _tokens, probs = detect_language(self._model, mel)
         dist = probs[0] if isinstance(probs, list) else probs
-        best = max(allowed, key=lambda lang: dist.get(lang, 0.0))
-        log.info(
-            "Restricted lang detect: %s -> %s",
-            " ".join(f"{lang}={dist.get(lang, 0.0):.2f}" for lang in allowed),
-            best,
-        )
-        return best
+        return {lang: float(dist.get(lang, 0.0)) for lang in allowed}
 
-    def transcribe(
+    def _transcribe(
         self, audio: np.ndarray, language: str, initial_prompt: str | None
     ) -> list[dict]:
         import mlx_whisper

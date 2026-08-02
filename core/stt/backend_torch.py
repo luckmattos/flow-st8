@@ -29,7 +29,7 @@ class TorchWhisperBackend:
         self._model = whisper.load_model(self._model_name, device=self._device)
         log.info("Whisper model loaded (%s).", self.name)
 
-    def detect_language(self, audio: np.ndarray, allowed: tuple[str, ...]) -> str:
+    def language_probs(self, audio: np.ndarray, allowed: tuple[str, ...]) -> dict[str, float]:
         import whisper
 
         mel = whisper.log_mel_spectrogram(
@@ -38,13 +38,7 @@ class TorchWhisperBackend:
         if self._use_fp16:
             mel = mel.half()
         _, probs = self._model.detect_language(mel)
-        best = max(allowed, key=lambda lang: probs.get(lang, 0.0))
-        log.info(
-            "Restricted lang detect: %s -> %s",
-            " ".join(f"{lang}={probs.get(lang, 0.0):.2f}" for lang in allowed),
-            best,
-        )
-        return best
+        return {lang: float(probs.get(lang, 0.0)) for lang in allowed}
 
     def transcribe(
         self, audio: np.ndarray, language: str, initial_prompt: str | None

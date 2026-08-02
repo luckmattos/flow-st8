@@ -20,6 +20,8 @@ log = logging.getLogger(__name__)
 #: Below this RMS the recording is treated as silence, not speech.
 _SILENCE_RMS = 0.005
 _NO_SPEECH_MAX = 0.6
+#: How far a non-preferred language must lead before it is chosen.
+_LANG_MARGIN = 0.15
 
 
 class Transcriber:
@@ -57,6 +59,36 @@ class Transcriber:
         if self._backend is None:
             self.preload()
 
+    def _detect_language(self, backend, audio: np.ndarray) -> str:
+        """Restricted auto-detect: only the allowed languages, first preferred.
+
+        The order of _allowed_langs is a preference, not a tie-break, so a later
+        language has to win by a clear margin. Measured on this project:
+        genuinely English audio scores en≈0.95-1.00, while Portuguese speech the
+        model is unsure about lands around pt=0.37/en=0.44 — close enough to flip
+        on noise, and picking English there mangles the whole transcription.
+        """
+        preferred = self._allowed_langs[0]
+        try:
+            probs = backend.language_probs(audio, self._allowed_langs)
+        except Exception:
+            log.exception("Language detection failed, defaulting to %s.", preferred)
+            return preferred
+
+        best = max(self._allowed_langs, key=lambda lang: probs.get(lang, 0.0))
+        chosen = best
+        if best != preferred:
+            margin = probs.get(best, 0.0) - probs.get(preferred, 0.0)
+            if margin < _LANG_MARGIN:
+                chosen = preferred
+
+        log.info(
+            "Restricted lang detect: %s -> %s",
+            " ".join(f"{lang}={probs.get(lang, 0.0):.2f}" for lang in self._allowed_langs),
+            chosen + (f" (over {best}, margin too small)" if chosen != best else ""),
+        )
+        return chosen
+
     def transcribe(self, audio: np.ndarray, context_hint: str | None = None) -> str:
         """Transcribe float32 16kHz mono audio. Returns cleaned text.
 
@@ -78,15 +110,7 @@ class Transcriber:
             config = self._config
 
         if config.language == "auto":
-            # Restricted auto-detect: only pt or en, never other languages.
-            try:
-                lang = backend.detect_language(audio, self._allowed_langs)
-            except Exception:
-                log.exception(
-                    "Language detection failed, defaulting to %s.",
-                    self._allowed_langs[0],
-                )
-                lang = self._allowed_langs[0]
+            lang = self._detect_language(backend, audio)
         else:
             lang = config.language
 
