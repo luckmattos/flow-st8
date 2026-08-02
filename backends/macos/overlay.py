@@ -48,9 +48,12 @@ _LOGO = "assets/flow-st8-icon.png"
 
 # Pulsing recording dot, mirroring assets/flow-st8-icon-recording.svg (a fixed
 # r=13 circle in a 100px canvas) but animated: radius tracks live audio level
-# instead of staying static.
-_DOT_MIN_R = 7.0
-_DOT_MAX_R = 15.0
+# instead of staying static. The outer green circle is deliberately smaller
+# than the badge canvas (not edge-to-edge like the loading spinner) so it
+# never clips against the panel bounds.
+_REC_CIRCLE_R = _BADGE / 4.0
+_DOT_MIN_R = 3.5
+_DOT_MAX_R = 7.5
 
 _SPIN_SECONDS = 2.0  # one full loading-spinner turn
 
@@ -323,10 +326,11 @@ class WaveOverlay:
         if not is_speech:
             level = max(0.10, 0.18 + math.sin(self._phase * 2.2) * 0.05)
 
-        draw.ellipse([0, 0, _BADGE, _BADGE], fill=_BRAND_GREEN)
+        cx = cy = _BADGE / 2
+        r = _REC_CIRCLE_R
+        draw.ellipse([cx - r, cy - r, cx + r, cy + r], fill=_BRAND_GREEN)
 
         radius = _DOT_MIN_R + (_DOT_MAX_R - _DOT_MIN_R) * level
-        cx = cy = _BADGE / 2
         draw.ellipse(
             [cx - radius, cy - radius, cx + radius, cy + radius], fill=_BRAND_DARK
         )
