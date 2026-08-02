@@ -4,6 +4,7 @@ import logging
 import sys
 from logging.handlers import RotatingFileHandler
 
+from core import singleton
 from core.app import FlowSt8App
 from core.config import load_config
 from core.paths import APP_DIR, LOG_PATH
@@ -44,6 +45,16 @@ def main() -> None:
     _setup_utf8_stdio()
     _setup_logging()
     log = logging.getLogger("flow-st8")
+
+    if not singleton.acquire():
+        # Expected the first time autostart turns on while the app is already
+        # running manually: enabling it loads the LaunchAgent immediately (so
+        # the change applies without a logout), and RunAtLoad then starts a
+        # second process a few seconds later. On macOS a duplicate is not
+        # harmless like on Windows — CGEventTap has no exclusivity, so both
+        # processes would react to the same keypress. Decline quietly instead.
+        log.info("Another flow-st8 instance is already running. Exiting.")
+        return
 
     log.info("Loading configuration...")
     config = load_config()
