@@ -11,7 +11,11 @@ bundle still builds, just with the stock PyInstaller icon.
 
 from pathlib import Path
 
-from PyInstaller.utils.hooks import collect_data_files
+from PyInstaller.utils.hooks import (
+    collect_data_files,
+    collect_dynamic_libs,
+    collect_submodules,
+)
 
 ROOT = Path(SPECPATH).resolve().parent.parent
 VERSION = (ROOT / "VERSION").read_text(encoding="utf-8").strip()
@@ -26,12 +30,26 @@ datas = [
     (str(ROOT / "assets" / "icon-no-wave.png"), "assets"),
 ]
 datas += collect_data_files("silero_vad", includes=["data/*"])
+# MLX ships its Metal kernels as mlx/lib/mlx.metallib. PyInstaller treats it as
+# an unknown file type and drops it, and without it every GPU op fails at
+# runtime — in a bundle that otherwise looks complete.
+datas += collect_data_files("mlx", includes=["lib/*.metallib"])
 datas += collect_data_files("whisper", includes=["assets/*"])
+
+# libmlx.dylib links libjaccl.dylib through @rpath. PyInstaller follows the
+# first but not the second, and the bundle then dies at `import mlx.core` with
+# "Library not loaded: @rpath/libjaccl.dylib".
+binaries = collect_dynamic_libs("mlx")
 
 hiddenimports = [
     "sounddevice",
     "pyperclip",
     "silero_vad.data",
+    # mlx.core imports helpers like mlx._reprlib_fix at extension-init time,
+    # which static analysis never sees. Without them the bundle raises a bare
+    # "Encountered an error while initializing the extension".
+    *collect_submodules("mlx"),
+    *collect_submodules("mlx_whisper"),
     # backends/__init__.py picks the shell behind `if sys.platform`, and the
     # macOS one talks to AppKit/Quartz through pyobjc. Uncomment as
     # backends/macos/ lands — PyInstaller does not reliably follow either.
@@ -49,7 +67,7 @@ hiddenimports = [
 a = Analysis(
     [str(ROOT / "main.py")],
     pathex=[str(ROOT)],
-    binaries=[],
+    binaries=binaries,
     datas=datas,
     hiddenimports=hiddenimports,
     hookspath=[],

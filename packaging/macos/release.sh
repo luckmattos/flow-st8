@@ -42,10 +42,10 @@ fail() { printf '\n\033[1;31mERRO: %s\033[0m\n' "$1" >&2; exit 1; }
 [[ "$(uname -m)" == "arm64" ]] || fail "o spec tem target_arch=arm64; rode num Mac Apple Silicon."
 command -v pyinstaller >/dev/null || fail "pyinstaller não encontrado (pip install pyinstaller)."
 
-if ! security find-identity -v -p codesigning | grep -qF "$SIGN_IDENTITY"; then
+# -v hides self-signed certs (CSSMERR_TP_NOT_TRUSTED) that codesign accepts.
+if ! security find-identity -p codesigning | grep -qF "\"$SIGN_IDENTITY\""; then
     fail "certificado '$SIGN_IDENTITY' não encontrado no chaveiro.
-     Crie um autoassinado: Acesso às Chaves > Assistente de Certificado >
-     Criar um Certificado > Raiz autoassinada > Assinatura de Código."
+     Crie um com: ./packaging/macos/make-dev-cert.sh"
 fi
 
 # ---------------------------------------------------------------- icon
