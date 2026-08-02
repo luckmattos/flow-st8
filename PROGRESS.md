@@ -9,10 +9,11 @@ Rastreamento de trabalho em andamento. O `CLAUDE.md` aponta para cá.
 - Se uma decisão da seção **Decisões travadas** for revista, edite lá e registre o porquê — não deixe a decisão antiga viva em outro lugar.
 - Tarefas descobertas no meio do caminho entram na fase correspondente; não crie fase nova sem necessidade.
 
-**Estado atual: Fases 0 a 6 entregues. O flow-st8 roda no macOS, empacotado como `.app` dentro de um `.dmg`.**
+**Estado atual: Fases 0 a 6 entregues e validadas nas duas plataformas.** O flow-st8
+roda no macOS (empacotado como `.app` dentro de um `.dmg`) e no Windows, ambos
+testados de verdade — incluindo o rebrand e as animações do overlay.
 
-Único item aberto: **rodar a regressão da Fase 0 no Windows** — só o Lucas pode,
-e nada do port foi validado lá. Todo o resto está verificado no macOS.
+Sem itens abertos bloqueando. Riscos residuais na seção correspondente.
 
 ---
 
@@ -58,7 +59,7 @@ Mover código, sem mudar lógica. Critério de saída: **regressão zero no Wind
 - [x] Garantir que `config.toml` já existente no `%APPDATA%` continua carregando e **vence** os defaults novos
 - [x] `ci.yml`: import-check em `ubuntu-latest`, sem instalar dependências
 - [x] Atualizar o bloco `## Arquitetura` do `CLAUDE.md` para a estrutura nova de pastas
-- [ ] **Testar no Windows: hold, toggle, remap pelo tray, troca de modelo, autostart** ← única coisa que falta; não dá para fazer no Mac
+- [x] **Testado no Windows pelo Lucas** (2026-08-02): hold, toggle, remap pelo tray, troca de modelo, autostart, novo logo/animações. Achou e corrigiu no processo: beep inaudível durante gravação (`sd.play()` silencioso com o stream de captura aberto — voltou pro `winsound.Beep` nativo), serrilha no overlay (mesmo fix de super-sample 4x + downsample do mac) e sensibilidade de amplitude (mapeamento linear gastava a faixa toda nos últimos dB — trocado por medição em dBFS). Commit `1b41f84`
 
 ### Verificado até aqui (no macOS)
 
@@ -243,7 +244,7 @@ aproximado. Isso mede encanamento e velocidade, não acurácia.
 | Bundle gigante por causa do PyTorch | DMG de vários GB | Excluir `torch` do bundle mac depois da Fase 3 |
 | Gatekeeper sem notarização | Alerta de "possível malware" ao instalar | `xattr` documentado; conta paga quando alguém reclamar |
 | Refatoração da Fase 0 quebrar o Windows | Regressão para usuários reais | Teste manual completo antes de fechar a fase |
-| Overlay do Windows tem o mesmo problema de HiDPI que o mac tinha (bitmap em pixels lógicos, esticado pelo SO) | Badge borrado em tela com escala >100% | Não corrigido — exige declarar DPI awareness do processo (`SetProcessDpiAwareness` + reposicionar em pixels de dispositivo), risco alto de fazer às cegas sem máquina Windows real |
+| Overlay do Windows: a serrilha foi corrigida (`1b41f84`, mesmo super-sample 4x + downsample do mac), mas **DPI awareness do processo não foi declarada** | Badge ainda pode sair borrado — esticado pelo SO — em monitor com escala >100%, independente da serrilha já resolvida | Exige `SetProcessDpiAwareness` + reposicionar em pixels de dispositivo. Ninguém testou em monitor com escala ≠100% ainda |
 
 ---
 
