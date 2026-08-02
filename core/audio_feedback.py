@@ -1,16 +1,28 @@
 """Audio feedback via short generated tones.
 
-Replaces winsound.Beep, which is Windows-only. sounddevice is already a
-dependency for microphone capture, so this adds nothing to the install.
+sounddevice is the portable path — it is already a dependency for microphone
+capture, so it adds nothing to the install, and it is the only option on macOS.
+
+On Windows it is *not* the default. sd.play() opens an output stream on the
+default device, which on this platform routinely fails to be audible while the
+capture stream is live: the beep is dispatched, PortAudio reports success, and
+nothing comes out. winsound.Beep drives the system tone path instead, is
+unaffected by that contention, and is stdlib — it was the original Windows
+implementation and is kept as the preferred one here.
 """
 
 import logging
+import sys
 import threading
 
 import numpy as np
 import sounddevice as sd
 
 log = logging.getLogger(__name__)
+
+_USE_WINSOUND = sys.platform == "win32"
+if _USE_WINSOUND:
+    import winsound
 
 _SAMPLE_RATE = 44100
 _VOLUME = 0.18
@@ -40,7 +52,11 @@ def _play(*tones: tuple[int, int]) -> None:
         try:
             with _play_lock:
                 for freq, duration_ms in tones:
-                    sd.play(_tone(freq, duration_ms), _SAMPLE_RATE, blocking=True)
+                    if _USE_WINSOUND:
+                        # Blocks for duration_ms; already on a daemon thread.
+                        winsound.Beep(freq, duration_ms)
+                    else:
+                        sd.play(_tone(freq, duration_ms), _SAMPLE_RATE, blocking=True)
         except Exception:
             # No output device, or the device disappeared mid-play. Feedback is
             # cosmetic — never let it take the recording pipeline down.

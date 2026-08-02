@@ -10,7 +10,7 @@ import tkinter as tk
 import tkinter.font as tkfont
 
 import numpy as np
-from PIL import Image, ImageTk
+from PIL import Image, ImageDraw, ImageTk
 
 from core.resources import resource_path
 
@@ -24,6 +24,7 @@ _MARGIN_Y = 76
 # Transparency: root/canvas bg is this color -> color-keyed to transparent by Win32.
 _KEY_COLOR = "#000002"
 _KEY_COLORREF = 0x00020000  # COLORREF (0x00BBGGRR): B=2, G=0, R=0
+_KEY_RGB = (0x00, 0x00, 0x02)  # same colour for Pillow compositing
 
 _TEXT_COLOR = "#e0e0ff"
 _HINT_COLOR = "#7a8aaa"
@@ -50,6 +51,37 @@ _DOT_MAX_R = 12.0
 
 _SPIN_SECONDS = 2.0  # one full loading-spinner turn
 
+# Tk's create_oval has no anti-aliasing: it rasterizes with a hard, jagged edge
+# at any size. Same problem Pillow's ImageDraw has on macOS, and the same fix —
+# draw oversize and downsample with a quality filter. Here it also means the
+# badge is composited as one bitmap instead of stacked canvas items.
+_SUPERSAMPLE = 4
+
+# Attack/release for the level meter. A single symmetric factor (the old 0.72)
+# made the dot feel stuck near centre: it lagged so far behind speech onsets
+# that it never reached the top of its range before the syllable ended. Rising
+# fast and falling slow is what reads as "tracking my voice" — the peak lands
+# on the consonant, then eases back instead of flickering.
+_AMP_ATTACK = 0.55
+_AMP_RELEASE = 0.16
+
+# Level meter calibration, in dBFS on the chunk peak.
+#
+# The previous linear `amp * 24` is why normal speech sat near the centre and
+# only shouting reached the rim: loudness is logarithmic, so a linear map
+# spends most of its range on the last few dB.
+#
+# The range below is measured, not assumed. Conversational speech on a desktop
+# USB mic peaks around -33 dBFS with syllable peaks reaching about -28 — far
+# quieter than the -14 dBFS a "full scale" guess suggests, which is precisely
+# how you end up having to shout to move the dot. The ceiling sits just above
+# normal speaking peaks so ordinary talking uses the top of the travel, and
+# the floor sits well above a quiet room's noise (measured near -80 dBFS) so
+# breathing and fan noise do not drive the animation.
+_DB_FLOOR = -55.0  # below this the dot rests at minimum
+_DB_CEIL = -26.0   # at or above this it reaches the rim
+_DB_EPS = 1e-7     # keeps log10 finite on digital silence
+
 _GWL_EXSTYLE = -20
 _WS_EX_TRANSPARENT = 0x00000020
 _WS_EX_LAYERED = 0x00080000
@@ -63,6 +95,10 @@ class WaveOverlay:
 
     def __init__(self) -> None:
         self._queue: queue.Queue = queue.Queue(maxsize=128)
+        # Guards the live audio level only; the queue still carries commands.
+        self._amp_lock = threading.Lock()
+        self._amp = 0.0
+        self._is_speech = False
         self._ready = threading.Event()
         self._thread = threading.Thread(target=self._run, daemon=True)
         self._thread.start()
@@ -91,11 +127,22 @@ class WaveOverlay:
         self._queue.put(("hint", ""))
 
     def push_chunk(self, chunk: np.ndarray, is_speech: bool) -> None:
-        amp = float(np.abs(chunk).mean())
-        try:
-            self._queue.put_nowait(("chunk", amp, is_speech))
-        except queue.Full:
-            pass
+        # Deliberately NOT queued. Audio chunks arrive every ~32ms and the draw
+        # loop runs every 30ms, so routing level updates through the command
+        # queue made them compete with it: _poll drained every pending chunk per
+        # frame and kept only the last, and once the queue hit maxsize the
+        # put_nowait dropped newer levels on the floor. Both effects showed up
+        # as the dot stuttering and lagging behind the voice. A single
+        # lock-protected slot always holds the newest level instead.
+        #
+        # Peak, not mean: speech is short bursts separated by short gaps, and
+        # averaging a 32ms window flattens exactly the transients that make it
+        # feel responsive. Peak tracks the syllable; the release curve in _draw
+        # is what keeps it from flickering.
+        peak = float(np.abs(chunk).max())
+        with self._amp_lock:
+            self._amp = peak
+            self._is_speech = is_speech
 
     # ------------------------------------------------------------------
     # Tkinter thread
@@ -124,13 +171,11 @@ class WaveOverlay:
         self._root = root
         self._canvas = canvas
         self._icon = self._load_icon()
-        self._spin_photo: ImageTk.PhotoImage | None = None  # kept alive against Tk's GC
+        self._frame_photo: ImageTk.PhotoImage | None = None  # kept alive against Tk's GC
         self._visible = False
         self._mode = "wave"  # "wave" | "message" | "loading"
         self._message = ""
-        self._amp = 0.0
-        self._smoothed_amp = 0.0
-        self._is_speech = False
+        self._level = 0.0  # smoothed 0..1 loudness position
         self._phase = 0.0
         self._spin_deg = 0.0
         self._hint_text = ""
@@ -145,10 +190,16 @@ class WaveOverlay:
 
     def _load_icon(self) -> Image.Image | None:
         """Full logo, kept as a PIL Image (not PhotoImage) — the loading
-        spinner rotates it fresh from this source every frame."""
+        spinner rotates it fresh from this source every frame.
+
+        Held at _SUPERSAMPLE size rather than the final 68px: rotating a
+        badge-sized raster resamples an already-downscaled image once per
+        frame, which visibly chews up the edge. Rotating large and downsampling
+        after keeps every frame as sharp as the first."""
         try:
             image = Image.open(resource_path(_LOGO)).convert("RGBA")
-            return image.resize((_BADGE, _BADGE), Image.Resampling.LANCZOS)
+            px = _BADGE * _SUPERSAMPLE
+            return image.resize((px, px), Image.Resampling.LANCZOS)
         except Exception:
             return None
 
@@ -176,8 +227,9 @@ class WaveOverlay:
                 cmd = item[0]
                 if cmd == "show":
                     self._mode = "wave"
-                    self._amp = 0.0
-                    self._smoothed_amp = 0.0
+                    with self._amp_lock:
+                        self._amp = 0.0
+                    self._level = 0.0
                     self._visible = True
                     self._root.deiconify()
                     newly_shown = True
@@ -204,10 +256,6 @@ class WaveOverlay:
                 elif cmd == "hint":
                     self._hint_text = item[1]
                     resize_needed = True
-                elif cmd == "chunk":
-                    _, amp, is_speech = item
-                    self._amp = amp
-                    self._is_speech = is_speech
         except queue.Empty:
             pass
 
@@ -256,7 +304,20 @@ class WaveOverlay:
     def _draw(self) -> None:
         self._phase += 0.15
         self._spin_deg = (self._spin_deg + 360.0 / (_SPIN_SECONDS * 1000.0 / _FPS_MS)) % 360.0
-        self._smoothed_amp = self._smoothed_amp * 0.72 + self._amp * 0.28
+
+        with self._amp_lock:
+            amp, is_speech = self._amp, self._is_speech
+
+        # Convert to a 0..1 loudness position BEFORE smoothing. Smoothing raw
+        # amplitude and converting after would average in the linear domain and
+        # reintroduce the compression this is meant to undo.
+        db = 20.0 * math.log10(max(amp, _DB_EPS))
+        target = (db - _DB_FLOOR) / (_DB_CEIL - _DB_FLOOR)
+        target = min(1.0, max(0.0, target))
+
+        # Rise fast, fall slow — see _AMP_ATTACK.
+        factor = _AMP_ATTACK if target > self._level else _AMP_RELEASE
+        self._level += (target - self._level) * factor
 
         c = self._canvas
         c.delete("all")
@@ -267,7 +328,7 @@ class WaveOverlay:
         elif self._mode == "loading":
             self._draw_loading_spin()
         else:
-            self._draw_recording_circle()
+            self._draw_recording_circle(is_speech)
 
         if self._hint_text:
             c.create_text(
@@ -279,37 +340,66 @@ class WaveOverlay:
                 anchor="center",
             )
 
+    def _render_photo(self, frame: Image.Image) -> None:
+        """Composite an RGBA frame onto the key colour and blit it.
+
+        The window is colour-keyed, not per-pixel alpha: Win32 makes _KEY_COLOR
+        transparent by exact match, so a partially transparent pixel is not
+        something it can express. Flattening onto that colour ourselves keeps
+        the anti-aliased edges — they blend against the key colour and survive
+        as real pixels, while only the fully transparent background matches the
+        key exactly and drops out."""
+        flat = Image.new("RGBA", frame.size, _KEY_RGB + (255,))
+        flat.alpha_composite(frame)
+        self._frame_photo = ImageTk.PhotoImage(flat.convert("RGB"), master=self._root)
+        self._canvas.create_image(0, 0, image=self._frame_photo, anchor="nw")
+
     def _draw_loading_spin(self) -> None:
         """Rotate the logo clockwise. Since its green circle fills the canvas
         edge-to-edge and is perfectly round, rotating the whole raster reads as
         just the inner "s8" mark spinning — no need to separate it out."""
         if self._icon is None:
-            self._canvas.create_oval(2, 2, _BADGE - 2, _BADGE - 2, fill=_BRAND_GREEN, outline="")
+            ss = _SUPERSAMPLE
+            big = Image.new("RGBA", (_BADGE * ss, _BADGE * ss), (0, 0, 0, 0))
+            inset = 2 * ss
+            ImageDraw.Draw(big).ellipse(
+                [inset, inset, _BADGE * ss - inset, _BADGE * ss - inset],
+                fill=_BRAND_GREEN,
+            )
+            self._render_photo(big.resize((_BADGE, _BADGE), Image.Resampling.LANCZOS))
             return
         # Negative angle: Pillow rotates counter-clockwise for positive degrees.
         rotated = self._icon.rotate(-self._spin_deg, resample=Image.Resampling.BICUBIC)
-        self._spin_photo = ImageTk.PhotoImage(rotated, master=self._root)
-        self._canvas.create_image(0, 0, image=self._spin_photo, anchor="nw")
+        self._render_photo(rotated.resize((_BADGE, _BADGE), Image.Resampling.LANCZOS))
 
-    def _draw_recording_circle(self) -> None:
+    def _draw_recording_circle(self, is_speech: bool) -> None:
         """Green badge with a dark dot pulsing to the live audio level —
-        matches assets/flow-st8-icon-recording.svg, animated instead of static."""
-        # Real speech through a built-in mic runs quieter than the synthetic
-        # tones this was first tuned against — 24x instead of 18x reaches full
-        # size at normal speaking volume, not just when talking loudly.
-        level = min(1.0, self._smoothed_amp * 24.0)
-        if not self._is_speech:
+        matches assets/flow-st8-icon-recording.svg, animated instead of static.
+
+        Rendered through Pillow at _SUPERSAMPLE scale and downsampled rather
+        than drawn with create_oval, which produces a visibly stair-stepped
+        edge — the same reason the macOS backend supersamples."""
+        # Already a smoothed 0..1 loudness position — see the dBFS mapping in
+        # _draw. No further scaling here.
+        level = self._level
+        if not is_speech:
             level = max(0.10, 0.18 + math.sin(self._phase * 2.2) * 0.05)
 
-        cx = cy = _BADGE / 2
-        r = _REC_CIRCLE_R
-        self._canvas.create_oval(cx - r, cy - r, cx + r, cy + r, fill=_BRAND_GREEN, outline="")
+        ss = _SUPERSAMPLE
+        big = Image.new("RGBA", (_BADGE * ss, _BADGE * ss), (0, 0, 0, 0))
+        draw = ImageDraw.Draw(big)
 
-        radius = _DOT_MIN_R + (_DOT_MAX_R - _DOT_MIN_R) * level
-        self._canvas.create_oval(
-            cx - radius, cy - radius, cx + radius, cy + radius,
-            fill=_BRAND_DARK, outline="",
+        cx = cy = _BADGE * ss / 2
+        r = _REC_CIRCLE_R * ss
+        draw.ellipse([cx - r, cy - r, cx + r, cy + r], fill=_BRAND_GREEN)
+
+        radius = (_DOT_MIN_R + (_DOT_MAX_R - _DOT_MIN_R) * level) * ss
+        draw.ellipse(
+            [cx - radius, cy - radius, cx + radius, cy + radius], fill=_BRAND_DARK
         )
+
+        frame = big.resize((_BADGE, _BADGE), Image.Resampling.LANCZOS)
+        self._render_photo(frame)
 
     def _draw_message(self, text: str, w: int) -> None:
         self._canvas.create_rectangle(
