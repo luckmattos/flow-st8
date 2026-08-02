@@ -31,12 +31,13 @@ class SttBackend(Protocol):
         """Load the model. Called from a background thread."""
         ...
 
-    def detect_language(self, audio: "np.ndarray", allowed: tuple[str, ...]) -> str:
+    def language_probs(self, audio: "np.ndarray", allowed: tuple[str, ...]) -> dict[str, float]:
         """Pick the most likely language, restricted to `allowed`.
 
         Whisper cannot natively limit its auto-detect to a subset, so backends read
-        the full probability distribution and pick the best allowed entry. This
-        is what keeps a noisy recording from being transcribed as Arabic.
+        the full distribution and expose only the allowed slice. Choosing among
+        them is policy and lives in core/transcriber.py, so both engines apply
+        the same preference rule.
         """
         ...
 
