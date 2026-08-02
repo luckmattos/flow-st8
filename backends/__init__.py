@@ -68,6 +68,7 @@ if _PLATFORM == "win32":
 elif _PLATFORM == "darwin":
     # Fase 2 in progress: hotkey and injection are real, the UI is still stubbed.
     try:
+        from backends.macos import autostart
         from backends.macos.hotkey import HotkeyManager, check_combo_conflict
         from backends.macos.injector import TextInjector
         from backends.macos.overlay import WaveOverlay

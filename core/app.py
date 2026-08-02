@@ -78,7 +78,7 @@ class FlowSt8App:
             except Exception:
                 log.debug("Could not set the accessory activation policy.", exc_info=True)
 
-        missing = permissions.describe_missing()
+        missing = permissions.describe_missing(self.config.hotkey.hold_key)
         if missing:
             log.warning("%s", missing)
             self.tray.set_state("error")
