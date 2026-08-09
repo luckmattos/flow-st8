@@ -423,7 +423,7 @@ class FlowSt8App:
                     is_hold = self._recording_mode == "hold"
                 if is_hold:
                     toggle_key = self.config.hotkey.toggle_key
-                    self.overlay.show_hint(f"{toggle_key} → hands-free")
+                    self.overlay.show_hint(f"Mãos-livres: {keys.display_words(toggle_key)}")
 
             is_speech = self.vad.is_speech(chunk) > speech_threshold
             self.overlay.push_chunk(chunk, is_speech)

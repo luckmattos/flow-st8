@@ -26,13 +26,7 @@ class AudioRecorder:
 
         device = self._config.device_index if self._config.device_index >= 0 else None
 
-        with sd.InputStream(
-            samplerate=self._config.sample_rate,
-            channels=self._config.channels,
-            dtype="float32",
-            blocksize=chunk_frames,
-            device=device,
-        ) as stream:
+        with self._open_stream(chunk_frames, device) as stream:
             for _ in range(max_chunks):
                 if self._stop_event.is_set():
                     break
@@ -48,3 +42,27 @@ class AudioRecorder:
 
     def stop(self) -> None:
         self._stop_event.set()
+
+    def _open_stream(self, chunk_frames: int, device: int | None) -> sd.InputStream:
+        """Open the mic InputStream, self-healing from a stale PortAudio host.
+
+        macOS's CoreAudio backend can leave PortAudio's cached host state
+        invalid after the default input device changes underneath the app
+        (Bluetooth headset connect/disconnect, sleep/wake) — every stream open
+        then fails with a generic PortAudioError [-9986] until the process
+        restarts. Reinitializing PortAudio forces it to re-enumerate devices,
+        which recovers without requiring the user to relaunch the app.
+        """
+        kwargs = dict(
+            samplerate=self._config.sample_rate,
+            channels=self._config.channels,
+            dtype="float32",
+            blocksize=chunk_frames,
+            device=device,
+        )
+        try:
+            return sd.InputStream(**kwargs)
+        except sd.PortAudioError:
+            sd._terminate()
+            sd._initialize()
+            return sd.InputStream(**kwargs)

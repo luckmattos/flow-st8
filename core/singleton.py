@@ -44,6 +44,13 @@ def acquire() -> bool:
         else:
             import fcntl
 
+            # open() already makes the fd non-inheritable by default (PEP 446),
+            # but torch/whisper's multiprocessing.resource_tracker helper forks
+            # before exec and has been observed still holding this fd open —
+            # keeping the lock held (and every later launch stuck seeing "another
+            # instance is running") long after the actual app process is gone.
+            # Belt-and-suspenders: mark it CLOEXEC explicitly.
+            fcntl.fcntl(_handle, fcntl.F_SETFD, fcntl.FD_CLOEXEC)
             fcntl.flock(_handle, fcntl.LOCK_EX | fcntl.LOCK_NB)
     except OSError:
         _handle.close()

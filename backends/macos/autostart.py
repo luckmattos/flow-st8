@@ -102,6 +102,22 @@ def disable() -> bool:
     return True
 
 
+def deactivate_session() -> None:
+    """Unload the LaunchAgent from the current session, keeping the plist.
+
+    macOS's Background Items registry (`sfltool dumpbtm`) treats a Login Item
+    as something that should always be running: if the process disappears
+    while the item is still enabled there, macOS relaunches it within a
+    second or two — indistinguishable, from the Quit menu item's point of
+    view, from the app refusing to close. `bootout` removes the job from
+    launchd's live registry for this session only; the plist on disk is
+    untouched, so the real login-time RunAtLoad still fires next time.
+    """
+    if not is_enabled():
+        return
+    _launchctl("bootout", f"gui/{_uid()}/{LABEL}")
+
+
 def sync(desired: bool) -> None:
     """Ensure autostart matches the desired state."""
     if desired == is_enabled():

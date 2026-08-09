@@ -31,6 +31,16 @@ COLORS = {
 }
 
 _LOGO = "assets/flow-st8-icon.png"
+# macOS menu-bar extras are almost all monochrome silhouettes on a translucent
+# bar; the full-colour brand circle was the one icon that didn't match. This
+# is just the inner mark, white, no background circle. Windows keeps the
+# colourful logo — its tray sits on an opaque taskbar, not a shared menu bar.
+_LOGO_MONO = "assets/flow-st8-icon-mono.png"
+# The mono mark is inscribed edge-to-edge in its source canvas, so drawn at
+# full bleed it reads visibly taller than the neighbouring menu-bar glyphs,
+# which all carry their own built-in padding. Shrinking it onto the same
+# canvas size gives it that same breathing room.
+_MONO_MARK_SCALE = 0.72
 
 _AUTOSTART_LABEL = (
     "Start with Windows" if sys.platform == "win32" else "Iniciar com o sistema"
@@ -51,9 +61,18 @@ def _autostart():
 def _make_icon(state: str) -> Image.Image:
     """Create the tray icon from the app logo plus a small state badge."""
     color = COLORS.get(state, COLORS["idle"])
+    is_mac = sys.platform == "darwin"
+    logo = _LOGO_MONO if is_mac else _LOGO
     try:
-        img = Image.open(resource_path(_LOGO)).convert("RGBA")
-        img = img.resize((64, 64), Image.Resampling.LANCZOS)
+        src = Image.open(resource_path(logo)).convert("RGBA")
+        if is_mac:
+            inner = round(64 * _MONO_MARK_SCALE)
+            mark = src.resize((inner, inner), Image.Resampling.LANCZOS)
+            img = Image.new("RGBA", (64, 64), (0, 0, 0, 0))
+            offset = (64 - inner) // 2
+            img.paste(mark, (offset, offset), mark)
+        else:
+            img = src.resize((64, 64), Image.Resampling.LANCZOS)
     except Exception:
         img = Image.new("RGBA", (64, 64), (0, 0, 0, 0))
     draw = ImageDraw.Draw(img)
@@ -195,4 +214,9 @@ class TrayIcon:
 
     def _quit(self) -> None:
         self._app.shutdown()
+        if sys.platform == "darwin":
+            try:
+                _autostart().deactivate_session()
+            except Exception:
+                log.debug("Could not deactivate the LaunchAgent for this session.", exc_info=True)
         self._icon.stop()

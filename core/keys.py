@@ -66,6 +66,7 @@ def is_modifier_only(combo: str) -> bool:
 # the TOML is portable and only the label changes.
 _SYMBOLS = {"ctrl": "⌃", "alt": "⌥", "cmd": "⌘", "shift": "⇧"}
 _WINDOWS_LABELS = {"ctrl": "Ctrl", "alt": "Alt", "win": "Win", "shift": "Shift"}
+_DARWIN_WORDS = {"ctrl": "Control", "alt": "Option", "cmd": "Command", "shift": "Shift"}
 
 
 def display(combo: str) -> str:
@@ -79,3 +80,17 @@ def display(combo: str) -> str:
         else:
             rendered.append(_WINDOWS_LABELS.get(part, part.upper()))
     return "".join(rendered) if sys.platform == "darwin" else "+".join(rendered)
+
+
+def display_words(combo: str) -> str:
+    """Full key names joined with '+' — for prose (hints, tooltips), where the
+    tight symbol form `display()` uses for menus reads as too cramped."""
+    rendered = []
+    for part in normalize(combo).split("+"):
+        if not part:
+            continue
+        if sys.platform == "darwin":
+            rendered.append(_DARWIN_WORDS.get(part, part.upper()))
+        else:
+            rendered.append(_WINDOWS_LABELS.get(part, part.upper()))
+    return "+".join(rendered)

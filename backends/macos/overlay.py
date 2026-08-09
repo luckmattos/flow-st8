@@ -30,14 +30,22 @@ log = logging.getLogger(__name__)
 
 _BADGE = 68
 _MESSAGE_H = 30
-_HINT_H = 14
 _FPS = 30.0
 _MARGIN_X = 22
 _MARGIN_Y = 76
 
+# Hint callout: a dark chat-bubble tooltip anchored above the badge. Sized in
+# points (not scaled by the backing factor — that happens at draw time), so
+# _layout() and _render() agree on the same window geometry.
+_CALLOUT_FONT_PT = 13
+_CALLOUT_PAD_X = 12
+_CALLOUT_GAP = 6    # space between the callout's bottom edge and the badge
+_CALLOUT_H = 30
+
 _TEXT_COLOR = (224, 224, 255, 255)
-_HINT_COLOR = (122, 138, 170, 255)
 _MESSAGE_BG = (26, 26, 46, 235)
+_CALLOUT_BG = (20, 20, 20, 235)
+_CALLOUT_TEXT = (255, 255, 255, 255)
 
 # Exact fills from assets/flow-st8-icon.svg, so the badge we draw matches the
 # logo pixel-for-pixel instead of approximating the brand green.
@@ -58,8 +66,6 @@ _REC_CIRCLE_R = _BADGE / 4.0
 # always visible, even at peak level.
 _DOT_MIN_R = 2.5
 _DOT_MAX_R = 12.0
-
-_SPIN_SECONDS = 2.0  # one full loading-spinner turn
 
 # Pillow's ImageDraw has no anti-aliasing: ellipse() rasterizes with a hard,
 # jagged edge at any resolution. Drawing 4x oversize and downsampling with a
@@ -129,7 +135,6 @@ class WaveOverlay:
         self._smoothed_amp = 0.0
         self._is_speech = False
         self._phase = 0.0
-        self._spin_deg = 0.0
         self._size = (_BADGE, _BADGE)
         self._scale = 1.0  # replaced with the real backing scale in _ensure_panel
 
@@ -182,7 +187,7 @@ class WaveOverlay:
 
         self._scale = _backing_scale()
         self._font_msg = _load_font(round(12 * self._scale))
-        self._font_hint = _load_font(round(10 * self._scale))
+        self._font_hint = _load_font(round(_CALLOUT_FONT_PT * self._scale))
 
         rect = AppKit.NSMakeRect(0, 0, _BADGE, _BADGE)
         panel = AppKit.NSPanel.alloc().initWithContentRect_styleMask_backing_defer_(
@@ -211,10 +216,11 @@ class WaveOverlay:
         self._view = view
         try:
             # Kept as a PIL Image, not baked into an NSImage: the loading
-            # spinner rotates it fresh from this source every frame. Resized
-            # straight to physical-pixel size (68pt * scale) so there is one
-            # clean LANCZOS resize from the 100px source instead of stacking a
-            # second, lower-quality resize when AppKit fits it to the view.
+            # badge composites it fresh onto each frame, next to whatever
+            # hint callout is showing. Resized straight to physical-pixel
+            # size (68pt * scale) so there is one clean LANCZOS resize from
+            # the 100px source instead of stacking a second, lower-quality
+            # resize when AppKit fits it to the view.
             px = round(_BADGE * self._scale)
             self._icon = Image.open(resource_path(_LOGO)).convert("RGBA").resize(
                 (px, px), Image.Resampling.LANCZOS
@@ -289,11 +295,26 @@ class WaveOverlay:
             width = max(_BADGE, int(self._font_msg.getlength(self._message)) + 28)
             height = _MESSAGE_H
         else:
+            # Height is always _BADGE, hint or not — the badge's on-screen
+            # position (and the window's y) never changes. Only width grows,
+            # to the left, to fit the callout beside the badge.
             width, height = _BADGE, _BADGE
-
-        if self._hint_text:
-            height += _HINT_H
-            width = max(width, int(self._font_hint.getlength(self._hint_text)) + 16)
+            if self._hint_text:
+                # Measured at its true point size, not the physical-pixel size
+                # _font_hint was loaded at — this stays in the same unscaled
+                # unit as `width`, which drives point-space window geometry
+                # below. A small safety margin absorbs the sub-pixel rounding
+                # difference between this measurement pass and the much
+                # larger supersampled font instance actually drawn with.
+                try:
+                    measure_font = self._font_hint.font_variant(size=_CALLOUT_FONT_PT)
+                except Exception:
+                    measure_font = self._font_hint  # bitmap fallback: not resizable
+                callout_w = (
+                    int(measure_font.getlength(self._hint_text) * 1.08)
+                    + _CALLOUT_PAD_X * 2
+                )
+                width = _BADGE + _CALLOUT_GAP + callout_w
 
         if (width, height) == self._size:
             return
@@ -315,7 +336,6 @@ class WaveOverlay:
         width, height = self._size  # points — drive window geometry, unscaled
         scale = self._scale
         self._phase += 0.15
-        self._spin_deg = (self._spin_deg + 360.0 / (_SPIN_SECONDS * _FPS)) % 360.0
         with self._lock:
             amp, is_speech = self._amp, self._is_speech
         self._smoothed_amp = self._smoothed_amp * 0.72 + amp * 0.28
@@ -323,66 +343,77 @@ class WaveOverlay:
         # Physical-pixel canvas (points * scale) so nothing needs OS stretching.
         pw, ph = round(width * scale), round(height * scale)
 
-        if self._mode == "loading":
-            # The logo path (PNG source -> LANCZOS resize -> BICUBIC rotation)
-            # is already smooth; supersampling would just cost two extra
-            # resize passes for no visible gain.
-            frame = Image.new("RGBA", (pw, ph), (0, 0, 0, 0))
-            self._draw_loading_spin(frame, scale)
-        else:
-            # ImageDraw has no anti-aliasing — ellipse()/rounded_rectangle()
-            # rasterize with a hard, jagged edge at any resolution. Drawing
-            # oversize and downsampling with LANCZOS is what actually smooths
-            # the recording dot and the message bubble's rounded corners.
-            ss = _SUPERSAMPLE
+        # ImageDraw has no anti-aliasing — ellipse()/rounded_rectangle()
+        # rasterize with a hard, jagged edge at any resolution. Drawing
+        # oversize and downsampling with LANCZOS is what actually smooths the
+        # recording dot, the message bubble and the hint callout.
+        ss = _SUPERSAMPLE
+
+        if self._mode == "message":
             big = Image.new("RGBA", (pw * ss, ph * ss), (0, 0, 0, 0))
             draw = ImageDraw.Draw(big)
-            if self._mode == "message":
-                msg_h = _MESSAGE_H * scale * ss
-                draw.rounded_rectangle(
-                    [0, 0, pw * ss - 1, msg_h - 1], radius=8 * scale * ss, fill=_MESSAGE_BG
-                )
-                try:
-                    msg_font = self._font_msg.font_variant(size=round(12 * scale * ss))
-                except Exception:
-                    msg_font = self._font_msg  # bitmap fallback font: not resizable
-                draw.text(
-                    (pw * ss // 2, msg_h // 2), self._message,
-                    fill=_TEXT_COLOR, font=msg_font, anchor="mm",
-                )
-            else:
-                self._draw_recording_circle(draw, is_speech, scale * ss)
+            msg_h = _MESSAGE_H * scale * ss
+            draw.rounded_rectangle(
+                [0, 0, pw * ss - 1, msg_h - 1], radius=8 * scale * ss, fill=_MESSAGE_BG
+            )
+            try:
+                msg_font = self._font_msg.font_variant(size=round(12 * scale * ss))
+            except Exception:
+                msg_font = self._font_msg  # bitmap fallback font: not resizable
+            draw.text(
+                (pw * ss // 2, msg_h // 2), self._message,
+                fill=_TEXT_COLOR, font=msg_font, anchor="mm",
+            )
             frame = big.resize((pw, ph), Image.Resampling.LANCZOS)
+            self._view.setImage_(_pil_to_nsimage(frame, (width, height)))
+            return
+
+        # wave / loading: the badge always occupies the right _BADGE-wide
+        # column of the canvas, full height. A hint callout, when present,
+        # fills the space to its left. Growing the window for the callout
+        # only ever adds width on the left — the window's right edge and its
+        # height both stay fixed across resizes — so the badge's own
+        # on-screen position never moves, hint or not.
+        badge_px = round(_BADGE * scale)
+        big = Image.new("RGBA", (pw * ss, ph * ss), (0, 0, 0, 0))
+        draw = ImageDraw.Draw(big)
+
+        badge_cx = (pw - badge_px / 2) * ss
+        badge_cy = (ph * ss) / 2
+
+        if self._mode != "loading":
+            self._draw_recording_circle(draw, is_speech, scale * ss, badge_cx, badge_cy)
 
         if self._hint_text:
-            # Fresh Draw bound to the final native-resolution frame: the
-            # loading branch never created one, and the other branch's `draw`
-            # is bound to the discarded supersampled buffer, not this frame.
-            draw = ImageDraw.Draw(frame)
-            draw.text(
-                (pw // 2, (_BADGE + _HINT_H / 2) * scale), self._hint_text,
-                fill=_HINT_COLOR, font=self._font_hint, anchor="mm",
-            )
+            gap_ss = _CALLOUT_GAP * scale * ss
+            avail_w = pw * ss - badge_px * ss - gap_ss
+            self._draw_callout(draw, self._hint_text, avail_w, ph * ss, scale * ss)
+
+        frame = big.resize((pw, ph), Image.Resampling.LANCZOS)
+
+        if self._mode == "loading":
+            # The logo source is already smooth (PNG -> one LANCZOS resize in
+            # _ensure_panel); pasting it after the downsample avoids a second,
+            # redundant resize pass for no visible gain. Static — no rotation.
+            if self._icon is not None:
+                frame.paste(self._icon, (pw - badge_px, ph - badge_px), self._icon)
+            else:
+                d = ImageDraw.Draw(frame)
+                inset = round(2 * scale)
+                d.ellipse(
+                    [pw - badge_px + inset, ph - badge_px + inset, pw - inset, ph - inset],
+                    fill=_BRAND_GREEN,
+                )
 
         self._view.setImage_(_pil_to_nsimage(frame, (width, height)))
 
-    def _draw_loading_spin(self, frame: Image.Image, scale: float) -> None:
-        """Rotate the logo clockwise. Since its green circle fills the canvas
-        edge-to-edge and is perfectly round, rotating the whole raster reads as
-        just the inner "s8" mark spinning — no need to separate it out."""
-        if self._icon is None:
-            inset = 2 * scale
-            ImageDraw.Draw(frame).ellipse(
-                [inset, inset, _BADGE * scale - inset, _BADGE * scale - inset],
-                fill=_BRAND_GREEN,
-            )
-            return
-        # Negative angle: Pillow rotates counter-clockwise for positive degrees.
-        rotated = self._icon.rotate(-self._spin_deg, resample=Image.Resampling.BICUBIC)
-        frame.paste(rotated, (0, 0), rotated)
-
     def _draw_recording_circle(
-        self, draw: ImageDraw.ImageDraw, is_speech: bool, scale: float
+        self,
+        draw: ImageDraw.ImageDraw,
+        is_speech: bool,
+        scale: float,
+        cx: float,
+        cy: float,
     ) -> None:
         """Green badge with a dark dot pulsing to the live audio level —
         matches assets/flow-st8-icon-recording.svg, animated instead of static."""
@@ -393,11 +424,38 @@ class WaveOverlay:
         if not is_speech:
             level = max(0.10, 0.18 + math.sin(self._phase * 2.2) * 0.05)
 
-        cx = cy = _BADGE * scale / 2
         r = _REC_CIRCLE_R * scale
         draw.ellipse([cx - r, cy - r, cx + r, cy + r], fill=_BRAND_GREEN)
 
         radius = (_DOT_MIN_R + (_DOT_MAX_R - _DOT_MIN_R) * level) * scale
         draw.ellipse(
             [cx - radius, cy - radius, cx + radius, cy + radius], fill=_BRAND_DARK
+        )
+
+    def _draw_callout(
+        self,
+        draw: ImageDraw.ImageDraw,
+        text: str,
+        avail_w: float,
+        canvas_h: float,
+        scale: float,
+    ) -> None:
+        """Dark chat-bubble tooltip filling the space to the left of the
+        badge, vertically centered against it. `avail_w` is exactly that
+        space — `_layout()` already sized the window to fit the text — so the
+        bubble spans the full width rather than re-measuring and risking a
+        second, slightly different result that clips against its own edge.
+        `scale` already includes the supersample factor."""
+        try:
+            font = self._font_hint.font_variant(size=round(_CALLOUT_FONT_PT * scale))
+        except Exception:
+            font = self._font_hint  # bitmap fallback font: not resizable
+
+        bubble_h = _CALLOUT_H * scale
+        y0 = (canvas_h - bubble_h) / 2
+        y1 = y0 + bubble_h
+        draw.rounded_rectangle([0, y0, avail_w, y1], radius=8 * scale, fill=_CALLOUT_BG)
+        draw.text(
+            (avail_w / 2, (y0 + y1) / 2), text,
+            fill=_CALLOUT_TEXT, font=font, anchor="mm",
         )
