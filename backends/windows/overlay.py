@@ -10,24 +10,33 @@ import tkinter as tk
 import tkinter.font as tkfont
 
 import numpy as np
-from PIL import Image, ImageDraw, ImageTk
+from PIL import Image, ImageDraw, ImageFont, ImageTk
 
 from core.resources import resource_path
 
 _BADGE = 68
 _MESSAGE_H = 30
-_HINT_H = 14
 _FPS_MS = 30
 _MARGIN_X = 22
 _MARGIN_Y = 76
+
+# Hint callout: a dark chat-bubble tooltip beside the badge. Text is measured
+# and drawn with the same Pillow/FreeType font both times (not Tk's own font
+# metrics), so _resize()'s window-width calculation can't drift from what
+# _draw_callout() actually renders.
+_CALLOUT_FONT_PT = 13
+_CALLOUT_PAD_X = 12
+_CALLOUT_GAP = 6    # space between the callout's edge and the badge
+_CALLOUT_H = 30
 
 # Transparency: root/canvas bg is this color -> color-keyed to transparent by Win32.
 _KEY_COLOR = "#000002"
 _KEY_COLORREF = 0x00020000  # COLORREF (0x00BBGGRR): B=2, G=0, R=0
 _KEY_RGB = (0x00, 0x00, 0x02)  # same colour for Pillow compositing
 
-_TEXT_COLOR = "#e0e0ff"
-_HINT_COLOR = "#7a8aaa"
+_TEXT_COLOR = "#e0e0ff"  # Tk colour string — _draw_message() is native Tk, not Pillow
+_CALLOUT_BG = (20, 20, 20, 235)
+_CALLOUT_TEXT = (255, 255, 255, 255)
 
 # Exact fills from assets/flow-st8-icon.svg, so the badge we draw matches the
 # logo pixel-for-pixel instead of approximating the brand green.
@@ -48,8 +57,6 @@ _REC_CIRCLE_R = _BADGE / 4.0
 # always visible, even at peak level.
 _DOT_MIN_R = 2.5
 _DOT_MAX_R = 12.0
-
-_SPIN_SECONDS = 2.0  # one full loading-spinner turn
 
 # Tk's create_oval has no anti-aliasing: it rasterizes with a hard, jagged edge
 # at any size. Same problem Pillow's ImageDraw has on macOS, and the same fix —
@@ -88,6 +95,18 @@ _WS_EX_LAYERED = 0x00080000
 _LWA_COLORKEY = 0x00000001
 _LWA_ALPHA = 0x00000002
 _ALPHA_BYTE = int(0.94 * 255)
+
+
+def _load_font(size: int):
+    for path in (
+        "C:/Windows/Fonts/segoeui.ttf",
+        "C:/Windows/Fonts/arial.ttf",
+    ):
+        try:
+            return ImageFont.truetype(path, size)
+        except Exception:
+            continue
+    return ImageFont.load_default()
 
 
 class WaveOverlay:
@@ -171,13 +190,13 @@ class WaveOverlay:
         self._root = root
         self._canvas = canvas
         self._icon = self._load_icon()
+        self._font_hint = _load_font(_CALLOUT_FONT_PT)
         self._frame_photo: ImageTk.PhotoImage | None = None  # kept alive against Tk's GC
         self._visible = False
         self._mode = "wave"  # "wave" | "message" | "loading"
         self._message = ""
         self._level = 0.0  # smoothed 0..1 loudness position
         self._phase = 0.0
-        self._spin_deg = 0.0
         self._hint_text = ""
         self._current_w = _BADGE
         self._current_h = _BADGE
@@ -190,16 +209,11 @@ class WaveOverlay:
 
     def _load_icon(self) -> Image.Image | None:
         """Full logo, kept as a PIL Image (not PhotoImage) — the loading
-        spinner rotates it fresh from this source every frame.
-
-        Held at _SUPERSAMPLE size rather than the final 68px: rotating a
-        badge-sized raster resamples an already-downscaled image once per
-        frame, which visibly chews up the edge. Rotating large and downsampling
-        after keeps every frame as sharp as the first."""
+        badge composites it fresh onto each frame, next to whatever hint
+        callout is showing. Static, so one clean resize is all it needs."""
         try:
             image = Image.open(resource_path(_LOGO)).convert("RGBA")
-            px = _BADGE * _SUPERSAMPLE
-            return image.resize((px, px), Image.Resampling.LANCZOS)
+            return image.resize((_BADGE, _BADGE), Image.Resampling.LANCZOS)
         except Exception:
             return None
 
@@ -276,13 +290,22 @@ class WaveOverlay:
             w = max(_BADGE, font.measure(self._message) + 28)
             h = _MESSAGE_H
         else:
-            w = _BADGE
-            h = _BADGE
-
-        if self._hint_text:
-            h += _HINT_H
-            hint_font = tkfont.Font(family="Segoe UI", size=7)
-            w = max(w, hint_font.measure(self._hint_text) + 16)
+            # Height is always _BADGE, hint or not — the badge's on-screen
+            # position never changes. Only width grows, to the left, to fit
+            # the callout beside the badge.
+            w, h = _BADGE, _BADGE
+            if self._hint_text:
+                # Measured with the same Pillow font _draw_callout() renders
+                # with (not Tk's tkfont, a different metrics engine) so this
+                # can't undersize the window relative to what actually gets
+                # drawn. Small safety margin on top for the sub-pixel
+                # difference between this base-size measurement and the
+                # supersampled instance used at draw time.
+                callout_w = (
+                    int(self._font_hint.getlength(self._hint_text) * 1.08)
+                    + _CALLOUT_PAD_X * 2
+                )
+                w = _BADGE + _CALLOUT_GAP + callout_w
 
         if w == self._current_w and h == self._current_h:
             return
@@ -303,7 +326,6 @@ class WaveOverlay:
 
     def _draw(self) -> None:
         self._phase += 0.15
-        self._spin_deg = (self._spin_deg + 360.0 / (_SPIN_SECONDS * 1000.0 / _FPS_MS)) % 360.0
 
         with self._amp_lock:
             amp, is_speech = self._amp, self._is_speech
@@ -321,24 +343,49 @@ class WaveOverlay:
 
         c = self._canvas
         c.delete("all")
-        w = self._current_w
 
         if self._mode == "message":
-            self._draw_message(self._message, w)
-        elif self._mode == "loading":
-            self._draw_loading_spin()
-        else:
-            self._draw_recording_circle(is_speech)
+            self._draw_message(self._message, self._current_w)
+            return
+
+        # wave / loading: the badge always occupies the right _BADGE-wide
+        # column of the canvas, full height. A hint callout, when present,
+        # fills the space to its left. Growing the window for the callout
+        # only ever adds width on the left (see _place_window) — the badge's
+        # own on-screen position never moves, hint or not.
+        ss = _SUPERSAMPLE
+        w, h = self._current_w, self._current_h
+        big = Image.new("RGBA", (w * ss, h * ss), (0, 0, 0, 0))
+        draw = ImageDraw.Draw(big)
+
+        badge_cx = (w - _BADGE / 2) * ss
+        badge_cy = (h * ss) / 2
+
+        if self._mode != "loading":
+            self._draw_recording_circle(draw, is_speech, ss, badge_cx, badge_cy)
 
         if self._hint_text:
-            c.create_text(
-                w // 2,
-                _BADGE + _HINT_H // 2,
-                text=self._hint_text,
-                fill=_HINT_COLOR,
-                font=("Segoe UI", 7),
-                anchor="center",
-            )
+            gap_ss = _CALLOUT_GAP * ss
+            avail_w = (w - _BADGE) * ss - gap_ss
+            self._draw_callout(draw, self._hint_text, avail_w, h * ss, ss)
+
+        frame = big.resize((w, h), Image.Resampling.LANCZOS)
+
+        if self._mode == "loading":
+            # The logo source is already smooth (PNG -> one LANCZOS resize in
+            # _load_icon); pasting it after the downsample avoids a second,
+            # redundant resize pass for no visible gain. Static — no rotation.
+            if self._icon is not None:
+                frame.paste(self._icon, (w - _BADGE, h - _BADGE), self._icon)
+            else:
+                d = ImageDraw.Draw(frame)
+                inset = 2
+                d.ellipse(
+                    [w - _BADGE + inset, h - _BADGE + inset, w - inset, h - inset],
+                    fill=_BRAND_GREEN,
+                )
+
+        self._render_photo(frame)
 
     def _render_photo(self, frame: Image.Image) -> None:
         """Composite an RGBA frame onto the key colour and blit it.
@@ -354,25 +401,14 @@ class WaveOverlay:
         self._frame_photo = ImageTk.PhotoImage(flat.convert("RGB"), master=self._root)
         self._canvas.create_image(0, 0, image=self._frame_photo, anchor="nw")
 
-    def _draw_loading_spin(self) -> None:
-        """Rotate the logo clockwise. Since its green circle fills the canvas
-        edge-to-edge and is perfectly round, rotating the whole raster reads as
-        just the inner "s8" mark spinning — no need to separate it out."""
-        if self._icon is None:
-            ss = _SUPERSAMPLE
-            big = Image.new("RGBA", (_BADGE * ss, _BADGE * ss), (0, 0, 0, 0))
-            inset = 2 * ss
-            ImageDraw.Draw(big).ellipse(
-                [inset, inset, _BADGE * ss - inset, _BADGE * ss - inset],
-                fill=_BRAND_GREEN,
-            )
-            self._render_photo(big.resize((_BADGE, _BADGE), Image.Resampling.LANCZOS))
-            return
-        # Negative angle: Pillow rotates counter-clockwise for positive degrees.
-        rotated = self._icon.rotate(-self._spin_deg, resample=Image.Resampling.BICUBIC)
-        self._render_photo(rotated.resize((_BADGE, _BADGE), Image.Resampling.LANCZOS))
-
-    def _draw_recording_circle(self, is_speech: bool) -> None:
+    def _draw_recording_circle(
+        self,
+        draw: ImageDraw.ImageDraw,
+        is_speech: bool,
+        scale: float,
+        cx: float,
+        cy: float,
+    ) -> None:
         """Green badge with a dark dot pulsing to the live audio level —
         matches assets/flow-st8-icon-recording.svg, animated instead of static.
 
@@ -385,21 +421,41 @@ class WaveOverlay:
         if not is_speech:
             level = max(0.10, 0.18 + math.sin(self._phase * 2.2) * 0.05)
 
-        ss = _SUPERSAMPLE
-        big = Image.new("RGBA", (_BADGE * ss, _BADGE * ss), (0, 0, 0, 0))
-        draw = ImageDraw.Draw(big)
-
-        cx = cy = _BADGE * ss / 2
-        r = _REC_CIRCLE_R * ss
+        r = _REC_CIRCLE_R * scale
         draw.ellipse([cx - r, cy - r, cx + r, cy + r], fill=_BRAND_GREEN)
 
-        radius = (_DOT_MIN_R + (_DOT_MAX_R - _DOT_MIN_R) * level) * ss
+        radius = (_DOT_MIN_R + (_DOT_MAX_R - _DOT_MIN_R) * level) * scale
         draw.ellipse(
             [cx - radius, cy - radius, cx + radius, cy + radius], fill=_BRAND_DARK
         )
 
-        frame = big.resize((_BADGE, _BADGE), Image.Resampling.LANCZOS)
-        self._render_photo(frame)
+    def _draw_callout(
+        self,
+        draw: ImageDraw.ImageDraw,
+        text: str,
+        avail_w: float,
+        canvas_h: float,
+        scale: float,
+    ) -> None:
+        """Dark chat-bubble tooltip filling the space to the left of the
+        badge, vertically centered against it. `avail_w` is exactly that
+        space — _resize() already sized the window to fit the text — so the
+        bubble spans the full width rather than re-measuring and risking a
+        second, slightly different result that clips against its own edge.
+        `scale` is the supersample factor."""
+        try:
+            font = self._font_hint.font_variant(size=round(_CALLOUT_FONT_PT * scale))
+        except Exception:
+            font = self._font_hint  # bitmap fallback font: not resizable
+
+        bubble_h = _CALLOUT_H * scale
+        y0 = (canvas_h - bubble_h) / 2
+        y1 = y0 + bubble_h
+        draw.rounded_rectangle([0, y0, avail_w, y1], radius=8 * scale, fill=_CALLOUT_BG)
+        draw.text(
+            (avail_w / 2, (y0 + y1) / 2), text,
+            fill=_CALLOUT_TEXT, font=font, anchor="mm",
+        )
 
     def _draw_message(self, text: str, w: int) -> None:
         self._canvas.create_rectangle(
